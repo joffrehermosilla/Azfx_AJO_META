@@ -1,0 +1,30 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "java",
+
+    "COSMOS_ENDPOINT":   "https://<tu-cosmos-account>.documents.azure.com:443/",
+    "COSMOS_KEY":        "<TU_COSMOS_PRIMARY_KEY>",
+    "COSMOS_DATABASE":   "bcp-whatsapp",
+    "COSMOS_CONTAINER_CORRELATION": "message-correlation",
+    "COSMOS_CONTAINER_EVENTS":      "events",
+
+    "META_VERIFY_TOKEN": "bcp_meta_verify_2026",
+    "META_APP_SECRET":   "<TU_META_APP_SECRET>",
+
+    "CDP_INGEST_URL":    "https://dcs.adobedc.net/collection/e65e89630b3479fe88994d69106307462dabf30fe2f648b3d178aeded18b3d4d",
+    "CDP_FLOW_ID":       "c508bc8f-964f-4e49-81e8-1142cc239a99",
+    "CDP_BEARER_TOKEN":  "<TU_CDP_BEARER_TOKEN>",
+
+    "AJO_WEBHOOK_URL":   "https://platform-va7.adobe.io/journeys/webhooks/ingest/78dc043f-faf9-4490-882f-11285090a93d",
+    "AJO_BEARER_TOKEN":  "<TU_AJO_BEARER_TOKEN>",
+
+    "FUNCTION_KEY":      "<TU_FUNCTION_KEY_PARA_CA2>"
+  },
+  "Host": {
+    "LocalHttpPort": 7071,
+    "CORS": "*",
+    "CORSCredentials": false
+  }
+}

@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.bcp.ajo</groupId>
+  <artifactId>azfx-ajo-meta</artifactId>
+  <version>1.0.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+
+  <name>BCP – AJO WhatsApp Correlation Azure Functions</name>
+  <description>
+    Azure Functions middleware para correlación, enriquecimiento y distribución
+    de eventos WhatsApp entre AJO (Adobe Journey Optimizer), Meta Business Platform
+    y Adobe CDP (AEP Streaming Ingestion).
+
+    Function 1 – AjoContextFunction  : POST /api/ajo-context
+      Recibe WAMID + contexto de AJO desde Custom Action 2.
+      Persiste documento de correlación en Cosmos DB.
+
+    Function 2 – MetaWebhookFunction : GET|POST /api/meta-webhook
+      Recibe callbacks de Meta (delivery y tracking).
+      Correlaciona por WAMID, enriquece y envía XDM a CDP.
+      Si executionType=NATIVE, reenvía también al AJO Webhook API.
+  </description>
+
+  <properties>
+    <java.version>21</java.version>
+    <maven.compiler.source>21</maven.compiler.source>
+    <maven.compiler.target>21</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <!-- Azure Functions -->
+    <azure.functions.maven.plugin.version>1.36.0</azure.functions.maven.plugin.version>
+    <azure.functions.java.library.version>3.1.0</azure.functions.java.library.version>
+
+    <!-- Azure Cosmos SDK -->
+    <azure.cosmos.version>4.61.1</azure.cosmos.version>
+
+    <!-- Jackson -->
+    <jackson.version>2.17.2</jackson.version>
+
+    <!-- SLF4J / Logback -->
+    <slf4j.version>2.0.13</slf4j.version>
+    <logback.version>1.5.6</logback.version>
+
+    <!-- Azure Function App settings (overridden in CI/CD) -->
+    <functionAppName>func-ajo-whatsapp-dev</functionAppName>
+    <functionResourceGroup>rg-ajo-whatsapp-desafunc-dev</functionResourceGroup>
+    <functionRegion>eastus</functionRegion>
+    <functionPricingTier>Flex Consumption</functionPricingTier>
+    <stagingDirectory>${project.build.directory}/azure-functions/${functionAppName}</stagingDirectory>
+  </properties>
+
+  <dependencies>
+
+    <!-- ═══════════════════════════════════════════════════
+         Azure Functions Java Worker
+    ═══════════════════════════════════════════════════ -->
+    <dependency>
+      <groupId>com.microsoft.azure.functions</groupId>
+      <artifactId>azure-functions-java-library</artifactId>
+      <version>${azure.functions.java.library.version}</version>
+    </dependency>
+
+    <!-- ═══════════════════════════════════════════════════
+         Azure Cosmos DB SDK v4 (async/sync)
+    ═══════════════════════════════════════════════════ -->
+    <dependency>
+      <groupId>com.azure</groupId>
+      <artifactId>azure-cosmos</artifactId>
+      <version>${azure.cosmos.version}</version>
+    </dependency>
+
+    <!-- ═══════════════════════════════════════════════════
+         JSON
+    ═══════════════════════════════════════════════════ -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.datatype</groupId>
+      <artifactId>jackson-datatype-jsr310</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+
+    <!-- ═══════════════════════════════════════════════════
+         Logging
+    ═══════════════════════════════════════════════════ -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-classic</artifactId>
+      <version>${logback.version}</version>
+    </dependency>
+
+    <!-- ═══════════════════════════════════════════════════
+         Test
+    ═══════════════════════════════════════════════════ -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.10.3</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-core</artifactId>
+      <version>5.12.0</version>
+      <scope>test</scope>
+    </dependency>
+
+  </dependencies>
+
+  <build>
+    <plugins>
+
+      <!-- Compilador Java 21 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <source>21</source>
+          <target>21</target>
+          <compilerArgs>
+            <arg>--enable-preview</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+
+      <!-- Azure Functions Maven Plugin -->
+      <plugin>
+        <groupId>com.microsoft.azure</groupId>
+        <artifactId>azure-functions-maven-plugin</artifactId>
+        <version>${azure.functions.maven.plugin.version}</version>
+        <configuration>
+          <appName>${functionAppName}</appName>
+          <resourceGroup>${functionResourceGroup}</resourceGroup>
+          <region>${functionRegion}</region>
+          <pricingTier>${functionPricingTier}</pricingTier>
+          <runtime>
+            <os>linux</os>
+            <javaVersion>21</javaVersion>
+          </runtime>
+          <appSettings>
+            <property>
+              <name>FUNCTIONS_EXTENSION_VERSION</name>
+              <value>~4</value>
+            </property>
+          </appSettings>
+        </configuration>
+        <executions>
+          <execution>
+            <id>package-functions</id>
+            <goals>
+              <goal>package</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- Shade plugin para fat-jar -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.3</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>com.bcp.ajo.azfx.Main</mainClass>
+                </transformer>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- Tests -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.3.1</version>
+        <configuration>
+          <argLine>--enable-preview</argLine>
+        </configuration>
+      </plugin>
+
+    </plugins>
+  </build>
+
+</project>

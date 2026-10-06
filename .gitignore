@@ -1,0 +1,11 @@
+target/
+dependency-reduced-pom.xml
+.vscode/
+.idea/
+*.iml
+.settings/
+.project
+.classpath
+
+# Sensitive files
+local.settings.json
