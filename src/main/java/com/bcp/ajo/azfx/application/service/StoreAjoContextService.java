@@ -6,15 +6,17 @@ import com.bcp.ajo.azfx.domain.port.out.CorrelationRepositoryPort;
 import com.bcp.ajo.azfx.model.CorrelationDocument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
+import com.bcp.ajo.azfx.util.PhoneDacUtils;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Function;
 
 /**
- * StoreAjoContextService — Implementación del caso de uso de almacenamiento de contexto AJO.
- * Aplica programación funcional para mapear el comando a la entidad de persistencia.
+ * StoreAjoContextService — Implementación del caso de uso de almacenamiento de
+ * contexto AJO.
+ * Aplica programación funcional para mapear el comando a la entidad de
+ * persistencia.
  */
 public class StoreAjoContextService implements StoreAjoContextUseCase {
 
@@ -28,7 +30,9 @@ public class StoreAjoContextService implements StoreAjoContextUseCase {
         doc.setId(cmd.wamid());
         doc.setWamid(cmd.wamid());
         doc.setCustomerId(cmd.customerId());
-        doc.setRecipient(cmd.recipient());
+        // En StoreAjoContextService.java al mapear AjoContextCommand
+        doc.setRecipient(PhoneDacUtils.hashSha256(cmd.recipient()));
+        // Se guarda encriptado SHA-256
         doc.setWaId(cmd.waId() != null ? cmd.waId() : cmd.recipient());
         doc.setNamespace(cmd.namespace());
         doc.setJourneyId(cmd.journeyId());
@@ -57,12 +61,12 @@ public class StoreAjoContextService implements StoreAjoContextUseCase {
     @Override
     public CorrelationDocument execute(AjoContextCommand command) {
         Objects.requireNonNull(command, "command must not be null");
-        
+
         CorrelationDocument doc = TO_DOCUMENT.apply(command);
         repository.upsert(doc);
-        
+
         log.info("[USE-CASE] Contexto AJO guardado exitosamente — wamid={} correlationId={}",
-            doc.getWamid(), doc.getCorrelationId());
+                doc.getWamid(), doc.getCorrelationId());
         return doc;
     }
 }

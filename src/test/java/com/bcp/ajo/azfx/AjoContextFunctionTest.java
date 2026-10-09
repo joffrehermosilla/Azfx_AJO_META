@@ -36,10 +36,10 @@ class AjoContextFunctionTest {
     }
 
     private record MockHttp(
-        HttpRequestMessage<Optional<String>> request,
-        HttpResponseMessage.Builder builder,
-        HttpResponseMessage response
-    ) {}
+            HttpRequestMessage<Optional<String>> request,
+            HttpResponseMessage.Builder builder,
+            HttpResponseMessage response) {
+    }
 
     @SuppressWarnings("unchecked")
     private MockHttp createMockHttp(String body, HttpStatus expectedStatus) {
@@ -74,11 +74,11 @@ class AjoContextFunctionTest {
     @DisplayName("Retorna 400 Bad Request si falta el campo wamid")
     void shouldReturnBadRequestWhenWamidIsMissing() {
         String json = """
-            {
-              "customerId": "BCP_12345",
-              "journeyId": "campania-tc-v1"
-            }
-            """;
+                {
+                  "customerId": "BCP_12345",
+                  "journeyId": "campania-tc-v1"
+                }
+                """;
         MockHttp mockHttp = createMockHttp(json, HttpStatus.BAD_REQUEST);
 
         HttpResponseMessage res = function.run(mockHttp.request(), context);
@@ -92,19 +92,19 @@ class AjoContextFunctionTest {
     @DisplayName("Procesa y almacena exitosamente un payload válido de CA2 y retorna 200 OK")
     void shouldStoreCorrelationAndReturnOkForValidPayload() {
         String json = """
-            {
-              "wamid": "wamid.HBgLMjAyNjEwMDU=",
-              "customerId": "BCP_CLI_8877",
-              "phone": "51999888777",
-              "journeyId": "journey-creditos-2026",
-              "journeyVersionId": "v2",
-              "journeyVersionName": "Campaña Préstamo al Toque",
-              "journeyNodeId": "node_send_wa",
-              "journeyActionId": "action_ca1",
-              "templateName": "bcp_prestamo_v1",
-              "executionType": "CUSTOM"
-            }
-            """;
+                {
+                  "wamid": "wamid.HBgLMjAyNjEwMDU=",
+                  "customerId": "BCP_CLI_8877",
+                  "phone": "51999888777",
+                  "journeyId": "journey-creditos-2026",
+                  "journeyVersionId": "v2",
+                  "journeyVersionName": "Campaña Préstamo al Toque",
+                  "journeyNodeId": "node_send_wa",
+                  "journeyActionId": "action_ca1",
+                  "templateName": "bcp_prestamo_v1",
+                  "executionType": "CUSTOM"
+                }
+                """;
         MockHttp mockHttp = createMockHttp(json, HttpStatus.OK);
 
         HttpResponseMessage res = function.run(mockHttp.request(), context);
@@ -113,7 +113,8 @@ class AjoContextFunctionTest {
 
         // Validar que se invocó a Cosmos con el documento mapeado correctamente
         ArgumentCaptor<CorrelationDocument> captor = ArgumentCaptor.forClass(CorrelationDocument.class);
-        verify(cosmosService, times(1)).upsertCorrelation(captor.capture());
+        // USAR EL MÉTODO DEL PUERTO HEXAGONAL:
+        verify(cosmosService, times(1)).upsert(captor.capture());
 
         CorrelationDocument captured = captor.getValue();
         assertEquals("wamid.HBgLMjAyNjEwMDU=", captured.getWamid());
