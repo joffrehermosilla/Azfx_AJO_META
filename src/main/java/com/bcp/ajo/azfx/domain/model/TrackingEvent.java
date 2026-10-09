@@ -11,5 +11,20 @@ public record TrackingEvent(
     String trackingType,
     String reply,
     String buttonId,
-    String buttonTitle
-) {}
+    String buttonTitle,
+    String payloadCustomerId,
+    String payloadTemplateName
+) {
+    // Constructor de conveniencia (compatibilidad con llamadas anteriores de 7 argumentos)
+    public TrackingEvent(
+        String wamidOutbound,
+        String wamidInbound,
+        String metaTimestamp,
+        String trackingType,
+        String reply,
+        String buttonId,
+        String buttonTitle
+    ) {
+        this(wamidOutbound, wamidInbound, metaTimestamp, trackingType, reply, buttonId, buttonTitle, null, null);
+    }
+}

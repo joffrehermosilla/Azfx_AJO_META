@@ -180,7 +180,37 @@ public class ProcessMetaWebhookService implements ProcessMetaWebhookUseCase {
             return new TrackingEvent(wamidOut, wamidIn, metaTs, "text_reply", text, null, null);
         }
 
+    
+if ("button".equals(type)) {
+    Map<String, Object> button = getMap(message, "button");
+
+    if (button == null) {
         return null;
+    }
+
+    String rawPayload = getString(button, "payload");
+    Map<String, String> metadata = parseButtonPayload(rawPayload);
+
+    Map<String, Object> context = getMap(message, "context");
+    String wamidOutbound = context != null
+        ? getString(context, "id")
+        : null;
+
+    return new TrackingEvent(
+        wamidOutbound,
+        wamidIn,
+        metaTs,
+        "button_reply",
+        getString(button, "text"),
+        null,
+        getString(button, "text"),
+        metadata.get("cid"),
+        metadata.get("tn")
+    );
+}
+        return null;
+
+
     }
 
     // ── Extracción segura y funcional de colecciones JSON ───────────────────
@@ -197,6 +227,24 @@ public class ProcessMetaWebhookService implements ProcessMetaWebhookUseCase {
             .filter(Objects::nonNull)
             .toList();
     }
+
+    private Map<String, String> parseButtonPayload(String payload) {
+    if (payload == null || payload.isBlank()) {
+        return Map.of();
+    }
+
+    return Arrays.stream(payload.split("\\|"))
+        .map(String::trim)
+        .filter(part -> part.contains("="))
+        .map(part -> part.split("=", 2))
+        .filter(pair -> pair.length == 2)
+        .filter(pair -> !pair[0].isBlank() && !pair[1].isBlank())
+        .collect(java.util.stream.Collectors.toMap(
+            pair -> pair[0].trim(),
+            pair -> pair[1].trim(),
+            (first, ignored) -> first
+        ));
+}
 
     @SuppressWarnings("unchecked")
     private List<Map<String, Object>> extractList(Map<String, Object> map, String key) {

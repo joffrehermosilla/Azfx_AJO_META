@@ -3,7 +3,8 @@ package com.bcp.ajo.azfx.domain.port.out;
 import java.util.Map;
 
 /**
- * Puerto de Salida (Driven Port) para el reenvío de eventos nativos hacia AJO Webhook Ingest API.
+ * Puerto de Salida (Driven Port) para el reenvío de eventos nativos hacia AJO
+ * Webhook Ingest API.
  */
 @FunctionalInterface
 public interface AjoRelayPort {

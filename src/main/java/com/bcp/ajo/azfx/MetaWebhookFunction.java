@@ -138,7 +138,8 @@ public class MetaWebhookFunction {
         long startMs = System.currentTimeMillis();
         log.info("[FUNCTION2] POST /meta-webhook — Invocation ID: {}", context.getInvocationId());
 
-        String rawBody = request.getBody().orElse("").trim();
+        // Cuerpo crudo sin .trim() para evitar alteraciones en la firma HMAC-SHA256
+        String rawBody = request.getBody().orElse("");
         String signature = request.getHeaders().getOrDefault(
             "x-hub-signature-256",
             request.getHeaders().get("X-Hub-Signature-256")
