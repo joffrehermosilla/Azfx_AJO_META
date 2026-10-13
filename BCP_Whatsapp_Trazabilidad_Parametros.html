@@ -1,0 +1,1805 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BCP — Arquitectura, Flujo y JSONs Dinámicos WhatsApp (AJO · Azure · Meta · CDP)</title>
+<!-- Fonts: inline CSS @import con fallback offline completo -->
+<style>
+  /* Intentar cargar Google Fonts si hay internet, sino usar system fonts */
+  @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Newsreader:ital,wght@0,400;0,600;1,400&display=swap');
+</style>
+
+<style>
+:root {
+  --bg: #0B0F17;
+  --surface: #121824;
+  --surface-2: #1A2234;
+  --surface-3: #222C42;
+  --surface-card: rgba(22, 30, 46, 0.85);
+  --border: #26334D;
+  --border-focus: #3D527A;
+  --ink-1: #F0F4F8;
+  --ink-2: #A5B4CB;
+  --ink-3: #6B7C96;
+  
+  /* Brand Lanes */
+  --aep: #B02F3D;
+  --ajo: #E53935;
+  --azure: #0078D4;
+  --meta: #0084FF;
+  --user: #00C853;
+  --cosmos: #107C41;
+  --cdp: #9C27B0;
+  
+  /* Paths */
+  --path-native: #FFB300;
+  --path-custom: #00E5FF;
+  --signal: #00E5FF;
+  --signal-soft: rgba(0, 229, 255, 0.25);
+  --trail: #0078D4;
+  
+  --font-ui: "Archivo", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-read: "Newsreader", Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Consolas", "Courier New", monospace;
+  
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
+  --shadow-lg: 0 16px 50px rgba(0,0,0,0.55);
+  --radius: 14px;
+}
+
+[data-theme="light"] {
+  --bg: #F4F6F9;
+  --surface: #FFFFFF;
+  --surface-2: #E9EDF2;
+  --surface-3: #DCE2EC;
+  --surface-card: rgba(255, 255, 255, 0.9);
+  --border: #CFD7E4;
+  --border-focus: #9AA8C0;
+  --ink-1: #0F172A;
+  --ink-2: #475569;
+  --ink-3: #8392A5;
+  
+  --aep: #B02F3D;
+  --ajo: #D32F2F;
+  --azure: #005A9E;
+  --meta: #0277BD;
+  --user: #0A7A38;
+  --cosmos: #0A6332;
+  --cdp: #7B1FA2;
+  
+  --path-native: #D97706;
+  --path-custom: #0284C7;
+  --signal: #0284C7;
+  --signal-soft: rgba(2, 132, 199, 0.2);
+}
+
+body.mode-native {
+  --signal: var(--path-native);
+  --signal-soft: rgba(255, 179, 0, 0.25);
+  --trail: #D97706;
+}
+
+body.mode-custom {
+  --signal: var(--path-custom);
+  --signal-soft: rgba(0, 229, 255, 0.25);
+  --trail: #0078D4;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-ui);
+  background: var(--bg);
+  color: var(--ink-1);
+  line-height: 1.5;
+  min-height: 100vh;
+  padding-bottom: 70px;
+  overflow-x: hidden;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.wrap {
+  max-width: 1640px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* Glass panel */
+.glass {
+  background: var(--surface-card);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* Header */
+header {
+  border-bottom: 1px solid var(--border);
+  padding: 16px 0;
+  position: sticky;
+  top: 0;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(16px);
+  z-index: 100;
+}
+
+.nav-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand-badge {
+  background: linear-gradient(135deg, #FF6F00, #FF8F00);
+  color: #fff;
+  font-weight: 800;
+  font-size: 15px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  letter-spacing: 0.05em;
+  box-shadow: 0 2px 12px rgba(255, 111, 0, 0.35);
+}
+
+.brand-title {
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+  color: var(--ink-1);
+}
+
+.brand-sub {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.btn-ctrl {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--ink-1);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.btn-ctrl:hover { border-color: var(--border-focus); }
+
+/* Hero */
+.hero {
+  padding: 24px 0 16px;
+}
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 28px;
+  align-items: center;
+}
+
+h1 {
+  font-size: clamp(26px, 3.2vw, 38px);
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  margin-bottom: 10px;
+}
+
+.hero-lead {
+  font-family: var(--font-read);
+  font-size: 17.5px;
+  line-height: 1.48;
+  color: var(--ink-2);
+}
+
+/* Path Selector Toolbar */
+.toolbar-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 14px 20px;
+  margin-bottom: 16px;
+}
+
+.path-selector-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.path-lbl {
+  font-size: 12.5px;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--ink-3);
+  letter-spacing: 0.05em;
+}
+
+.path-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  border: 1.5px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 6px 18px 6px 6px;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+  color: var(--ink-2);
+  transition: all 0.22s;
+}
+
+.path-btn .num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.path-btn:hover { border-color: var(--border-focus); color: var(--ink-1); }
+
+.path-btn[data-path="native"].active {
+  background: var(--ink-1);
+  color: var(--bg);
+  border-color: var(--path-native);
+}
+
+.path-btn[data-path="native"].active .num {
+  background: var(--path-native);
+  border-color: var(--path-native);
+  color: #121824;
+}
+
+.path-btn[data-path="custom"].active {
+  background: var(--ink-1);
+  color: var(--bg);
+  border-color: var(--path-custom);
+}
+
+.path-btn[data-path="custom"].active .num {
+  background: var(--path-custom);
+  border-color: var(--path-custom);
+  color: #121824;
+}
+
+/* Event Sub-type Selector */
+.event-type-pills {
+  display: flex;
+  gap: 6px;
+}
+
+.pill-sm {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pill-sm.active {
+  background: var(--surface-3);
+  color: var(--ink-1);
+  border-color: var(--border-focus);
+}
+
+/* Zoom controls */
+.zoom-group {
+  display: flex;
+  gap: 4px;
+}
+
+.zoom-btn {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--ink-1);
+  border-radius: 8px;
+  min-width: 34px;
+  height: 32px;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.zoom-btn:hover { border-color: var(--border-focus); }
+
+/* SVG Map Frame */
+.map-frame {
+  position: relative;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 20px;
+}
+
+.map-scroller {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+.map-stage {
+  position: relative;
+  width: 1600px;
+  height: 850px;
+  transform-origin: 0 0;
+}
+
+.map-stage svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+}
+
+#nodesLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.fx-layer {
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* Lane Headers */
+.lane-bg { fill-opacity: 0.05; }
+.lane-sep { stroke: var(--border); stroke-width: 1; }
+
+.lane-head {
+  position: absolute;
+  top: 0;
+  height: 56px;
+  padding: 10px 16px 0;
+  border-top: 3.5px solid var(--lane);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  pointer-events: none;
+}
+
+.lh-name {
+  font-size: 14.5px;
+  font-weight: 750;
+  color: var(--lane);
+  line-height: 1.2;
+}
+
+.lh-role {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* Nodes Styling */
+.node {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--ink-1);
+  text-align: left;
+  cursor: pointer;
+  line-height: 1.2;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.22s ease, border-color 0.18s ease;
+  z-index: 2;
+}
+
+.node .ico {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: var(--lane);
+  background: color-mix(in srgb, var(--lane) 14%, var(--surface));
+}
+
+.node .txt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.node .t {
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.node .s {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.node .cd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
+}
+
+.node:hover {
+  border-color: var(--lane);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+}
+
+.node.active-step {
+  border-color: var(--signal) !important;
+  box-shadow: 0 0 0 3px var(--signal-soft), var(--shadow-sm);
+  background: color-mix(in srgb, var(--signal) 12%, var(--surface));
+}
+
+.node.dim { opacity: 0.22; }
+
+/* Custom Node Kinds */
+.k-decision {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  justify-content: center;
+  align-items: center;
+}
+
+.k-decision .dia {
+  width: 26px;
+  height: 26px;
+  transform: rotate(45deg);
+  border: 2px solid var(--ink-2);
+  background: var(--surface);
+  border-radius: 4px;
+}
+
+.k-decision:hover .dia,
+.k-decision.active-step .dia {
+  border-color: var(--signal);
+  background: color-mix(in srgb, var(--signal) 20%, var(--surface));
+}
+
+.k-cyl {
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  text-align: center;
+  border-radius: 50% / 18px;
+  padding: 35px 12px 10px;
+  background: color-mix(in srgb, var(--lane) 8%, var(--surface));
+}
+
+.k-cyl::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: -1px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--lane) 16%, var(--surface));
+}
+
+.k-note {
+  background: transparent;
+  border: 1.5px dashed var(--border);
+  font-family: var(--font-read);
+  font-style: italic;
+  color: var(--ink-2);
+}
+
+.k-note .t { font-size: 13.5px; font-weight: 700; color: var(--ink-1); font-family: var(--font-read); }
+.k-note .s { font-size: 12px; }
+
+.k-dest {
+  border: 2px solid color-mix(in srgb, var(--lane) 60%, var(--border));
+  background: color-mix(in srgb, var(--lane) 8%, var(--surface));
+}
+
+/* Wires / Paths */
+.wire {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1.8;
+  marker-end: url(#arr);
+  transition: stroke 0.25s, opacity 0.25s, stroke-width 0.25s;
+}
+
+.wire.dash { stroke-dasharray: 6 4; }
+.wire.anno { stroke-dasharray: 3 3; }
+
+.wire.path {
+  stroke: var(--signal);
+  stroke-width: 3.2;
+  stroke-dasharray: 10 6;
+  marker-end: url(#arrH);
+  animation: pathflow 0.85s linear infinite;
+}
+
+.wire.path.hl {
+  stroke-width: 4.5;
+}
+
+.wire.vwire { display: none; }
+.wire.vwire.path { display: inline; }
+
+.wire.dim { opacity: 0.12; }
+
+@keyframes pathflow {
+  to { stroke-dashoffset: -16; }
+}
+
+/* Animated Token & Rings */
+#token {
+  fill: var(--signal);
+  stroke: var(--bg);
+  stroke-width: 3;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+#token.on { opacity: 1; }
+
+#ring {
+  fill: none;
+  stroke: var(--signal);
+  stroke-width: 2.5;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+#ring.go {
+  animation: ringPulse 0.9s ease-out;
+}
+
+@keyframes ringPulse {
+  from { transform: scale(1); opacity: 0.95; }
+  to { transform: scale(4.2); opacity: 0; }
+}
+
+/* Live Dynamic Payload Flow HUD */
+.live-flow-inspector {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.flow-controls-box {
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.flow-nav-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.step-counter {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--surface-2);
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.step-title-live {
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1.25;
+  margin-bottom: 8px;
+}
+
+.step-desc-live {
+  font-size: 13.5px;
+  color: var(--ink-2);
+  line-height: 1.45;
+  margin-bottom: 16px;
+}
+
+.flow-meta-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.flow-tag {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.tag-origin { border-color: var(--meta); color: var(--meta); }
+.tag-target { border-color: var(--cosmos); color: var(--cosmos); }
+.tag-proto { border-color: var(--azure); color: var(--azure); }
+
+.flow-nav-btns {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-flow {
+  padding: 9px 18px;
+  border-radius: 999px;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  transition: all 0.2s;
+}
+
+.btn-flow.primary {
+  background: var(--signal);
+  color: #121824;
+}
+
+.btn-flow.primary:hover {
+  filter: brightness(1.15);
+  box-shadow: 0 4px 14px var(--signal-soft);
+}
+
+.btn-flow.ghost {
+  background: var(--surface-2);
+  color: var(--ink-1);
+  border: 1px solid var(--border);
+}
+
+.btn-flow.ghost:hover {
+  border-color: var(--border-focus);
+}
+
+/* Dynamic Live JSON Code Box */
+.live-json-box {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.live-json-header {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--surface-2);
+}
+
+.live-json-title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.live-json-title i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--signal);
+  display: inline-block;
+  box-shadow: 0 0 10px var(--signal);
+}
+
+.code-container {
+  padding: 16px;
+  background: #080C12;
+  overflow-x: auto;
+  max-height: 380px;
+  position: relative;
+}
+
+pre code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink-1);
+}
+
+.copy-btn-mini {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.copy-btn-mini:hover { color: var(--ink-1); border-color: var(--border-focus); }
+
+/* Table Impact Section */
+.tables-preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.table-box {
+  display: flex;
+  flex-direction: column;
+}
+
+.table-box-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--surface-2);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.table-box-head h3 {
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Footer */
+footer {
+  text-align: center;
+  padding: 24px 0 10px;
+  border-top: 1px solid var(--border);
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+@media (max-width: 1024px) {
+  .hero-grid { grid-template-columns: 1fr; }
+  .live-flow-inspector { grid-template-columns: 1fr; }
+  .tables-preview-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+
+<body class="mode-custom">
+
+<header>
+  <div class="wrap nav-bar">
+    <div class="brand">
+      <span class="brand-badge">BCP</span>
+      <div>
+        <div class="brand-title">Workflow Visual y Trazabilidad de Parámetros WhatsApp</div>
+        <div class="brand-sub">Adobe Journey Optimizer · Azure Middleware · Meta API · Adobe CDP</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button class="btn-ctrl" id="themeToggle" onclick="toggleTheme()">
+        <span id="themeIcon">☀️</span> Modo Claro
+      </button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="hero-grid">
+      <div>
+        <h1>Visualizador del Flujo Dinámico y <span style="color: var(--signal);" id="heroPathTitle">Camino Custom Action</span></h1>
+        <p class="hero-lead">
+          Observa en tiempo real cómo los identificadores (<code>wamid</code>, <code>CICID</code>) y contextos de Journey viajan entre componentes, se unen en Azure y pueblan tanto <strong>Cosmos DB</strong> como el esquema <strong>XDM ExperienceEvent</strong> en <strong>Adobe CDP</strong>.
+        </p>
+      </div>
+      <div class="glass" style="padding: 18px 22px;">
+        <div style="font-size: 12.5px; font-weight: 700; color: var(--ink-3); text-transform: uppercase; margin-bottom: 6px;">Regla Clave de Correlación</div>
+        <p style="font-size: 13.5px; color: var(--ink-2); line-height: 1.45;">
+          • <strong>Delivery:</strong> El lookup en Cosmos DB usa <code style="color:#FFD54F;">statuses[0].id</code>.<br>
+          • <strong>Tracking:</strong> El lookup usa <code style="color:#FFD54F;">messages[0].context.id</code> (el WAMID de salida original). <code style="color:var(--ink-3);">messages[0].id</code> es el nuevo mensaje inbound.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Interactive Path Toolbar -->
+  <section class="glass toolbar-section">
+    <div class="path-selector-group">
+      <span class="path-lbl">Selecciona Camino:</span>
+      <button type="button" class="path-btn" data-path="native" onclick="switchPath(0)">
+        <span class="num">1</span> Nativo (WhatsApp Nativo AJO)
+      </button>
+      <button type="button" class="path-btn active" data-path="custom" onclick="switchPath(1)">
+        <span class="num">2</span> Custom (Custom Action + Azure)
+      </button>
+    </div>
+
+    <div class="path-selector-group">
+      <span class="path-lbl">Variante de Callback:</span>
+      <div class="event-type-pills">
+        <button class="pill-sm active" id="btnEvtDelivery" onclick="switchEventVariant('delivery')">Delivery Read</button>
+        <button class="pill-sm" id="btnEvtButton" onclick="switchEventVariant('button')">Button Reply</button>
+        <button class="pill-sm" id="btnEvtText" onclick="switchEventVariant('text')">Text Reply</button>
+      </div>
+    </div>
+
+    <div class="zoom-group">
+      <button type="button" class="zoom-btn" onclick="zoomMap(-0.1)">−</button>
+      <button type="button" class="zoom-btn" onclick="resetZoom()">Ajustar</button>
+      <button type="button" class="zoom-btn" onclick="zoomMap(0.1)">+</button>
+    </div>
+  </section>
+
+  <!-- Map Frame & SVG Workflow Canvas -->
+  <section class="map-frame" id="mapFrame">
+    <div class="map-scroller" id="scroller">
+      <div id="sizer">
+        <div class="map-stage" id="stage">
+
+          <!-- SVG Wires and Layers -->
+          <svg id="wires" width="1600" height="850" viewBox="0 0 1600 850" aria-hidden="true">
+            <defs>
+              <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+                <path d="M0,1 L10,5 L0,9 Z" fill="var(--border)"/>
+              </marker>
+              <marker id="arrH" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto">
+                <path d="M0,0.8 L10,5 L0,9.2 Z" fill="var(--signal)"/>
+              </marker>
+            </defs>
+            <g id="lanesG"></g>
+            <g id="wiresG"></g>
+          </svg>
+
+          <!-- Nodes HTML Layer -->
+          <div id="nodesLayer"></div>
+
+          <!-- Animated Tokens Layer -->
+          <svg class="fx-layer" width="1600" height="850" viewBox="0 0 1600 850" aria-hidden="true">
+            <circle id="ring" cx="-50" cy="-50" r="10"/>
+            <circle id="token" cx="-50" cy="-50" r="9"/>
+          </svg>
+
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Live Dynamic Flow & JSON Payload Inspector -->
+  <section class="live-flow-inspector">
+    
+    <!-- Controls & Step Narrative -->
+    <div class="glass flow-controls-box">
+      <div>
+        <div class="flow-nav-head">
+          <span class="step-counter" id="stepCounterBadge">PASO 1 DE 12</span>
+          <span style="font-size: 11px; font-weight: 700; color: var(--ink-3);" id="activeRouteName">RUTA CUSTOM</span>
+        </div>
+        <h2 class="step-title-live" id="stepTitleLive">Envío de Mensaje vía Custom Action</h2>
+        <p class="step-desc-live" id="stepDescLive">
+          AJO inicia el Journey y la primera Custom Action (CA1) invoca la API Cloud de Meta. Meta procesa la plantilla y devuelve en su respuesta el identificador clave <code>messages[0].id</code> (el WAMID).
+        </p>
+        
+        <div class="flow-meta-tags">
+          <span class="flow-tag tag-origin" id="tagOriginNode">Origen: AJO Custom Action</span>
+          <span class="flow-tag tag-target" id="tagTargetNode">Destino: Meta API Cloud</span>
+          <span class="flow-tag tag-proto" id="tagProto">Protocolo: HTTPS POST</span>
+        </div>
+      </div>
+
+      <div class="flow-nav-btns">
+        <button class="btn-flow ghost" id="btnPrevStep" onclick="prevStep()">◀ Anterior</button>
+        <button class="btn-flow primary" id="btnNextStep" onclick="nextStep()">Siguiente Paso ▶</button>
+        <button class="btn-flow ghost" id="btnAutoPlay" onclick="toggleAutoPlay()">▶ Reproducir Todo</button>
+      </div>
+    </div>
+
+    <!-- Live JSON in Transit -->
+    <div class="glass live-json-box">
+      <div class="live-json-header">
+        <div class="live-json-title">
+          <i></i> <span id="jsonPayloadLabel">JSON en Tránsito: CA1 Respuesta (Meta ➔ AJO)</span>
+        </div>
+        <button class="copy-btn-mini" onclick="copyJsonPayload()">Copiar JSON</button>
+      </div>
+      <div class="code-container">
+        <pre><code id="liveJsonCode"></code></pre>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- Real-time Table Impact View -->
+  <section class="tables-preview-grid">
+    
+    <!-- Table 1: Cosmos DB -->
+    <div class="glass table-box">
+      <div class="table-box-head">
+        <h3><span>💾 Cosmos DB:</span> <code>message-correlation</code></h3>
+        <span style="font-size: 11px; color: var(--cosmos); font-weight: 700;" id="cosmosStateBadge">ESTADO: STORED</span>
+      </div>
+      <div class="code-container">
+        <pre><code id="cosmosDocLive"></code></pre>
+      </div>
+    </div>
+
+    <!-- Table 2: Adobe CDP Custom Schema -->
+    <div class="glass table-box">
+      <div class="table-box-head">
+        <h3><span>📊 Adobe CDP:</span> <code>XDM ExperienceEvent Consolidado</code></h3>
+        <span style="font-size: 11px; color: var(--cdp); font-weight: 700;" id="cdpStateBadge">STREAMING INGESTION</span>
+      </div>
+      <div class="code-container">
+        <pre><code id="cdpDocLive"></code></pre>
+      </div>
+    </div>
+
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Arquitectura BCP WhatsApp Bidireccional · Adaptador Hexagonal Azure & Adobe Journey Optimizer</p>
+  </div>
+</footer>
+
+<script>
+/* =========================================================
+ 1. LANES Y GEOMETRÍA DEL MAPA
+========================================================= */
+const LANES = [
+  { id: 'aep', x: 0, w: 300, name: 'Adobe Experience Platform', role: 'CDP: Data Lake & Perfil 360' },
+  { id: 'ajo', x: 300, w: 380, name: 'Adobe Journey Optimizer', role: 'Diseño y Ejecución de Journeys' },
+  { id: 'azure', x: 680, w: 390, name: 'BCP en Microsoft Azure', role: 'Middleware: Correlación y Enriquecimiento' },
+  { id: 'meta', x: 1070, w: 230, name: 'Meta', role: 'WhatsApp Business Cloud API' },
+  { id: 'user', x: 1300, w: 300, name: 'Usuario final', role: 'Cliente en WhatsApp' }
+];
+
+/* 2. NODOS */
+const NODES = [
+  { id: 'journey', lane: 'ajo', x: 306, y: 142, w: 124, h: 46, t: 'Ejecutar journey', s: 'AJO Journey Engine' },
+  { id: 'split', lane: 'ajo', kind: 'decision', x: 443, y: 148, w: 34, h: 34, t: '¿Ruta?' },
+  { id: 'native', lane: 'ajo', x: 496, y: 72, w: 166, h: 66, t: 'Native Action WhatsApp', s: 'Envío Nativo AJO' },
+  { id: 'custom', lane: 'ajo', x: 496, y: 182, w: 166, h: 88, t: 'Custom Action WhatsApp', s: 'Envío CA1', cd: 'AJOC_Whatsapp_Poc' },
+  
+  { id: 'ca_corr', lane: 'azure', x: 692, y: 188, w: 156, h: 76, t: 'Custom Action 2', s: 'POST /api/ajo-context' },
+  { id: 'api_corr', lane: 'azure', x: 878, y: 188, w: 176, h: 76, t: 'Azure Function 1', s: 'Guarda en Cosmos DB' },
+  { id: 'table', lane: 'azure', kind: 'cyl', x: 878, y: 280, w: 176, h: 112, t: 'Cosmos DB', s: 'message-correlation (/wamid)' },
+  { id: 'lookup', lane: 'azure', x: 906, y: 404, w: 120, h: 28, t: 'Lookup por WAMID', s: 'Key: wamid' },
+  { id: 'relay', lane: 'azure', x: 876, y: 446, w: 180, h: 54, t: 'Azure Function 2', s: 'POST /api/meta-webhook' },
+  { id: 'queue', lane: 'azure', x: 710, y: 446, w: 136, h: 54, t: 'Queue / Asíncrono', s: 'Absorbe picos >200 TPS' },
+  { id: 'enrich', lane: 'azure', x: 886, y: 524, w: 160, h: 46, t: 'Enriquecer evento', s: 'Meta + Contexto AJO' },
+  { id: 'function', lane: 'azure', x: 907, y: 592, w: 118, h: 36, t: 'Ruteador Fan-Out', s: 'Evalúa executionType' },
+  { id: 'ajo_webhook', lane: 'azure', x: 692, y: 660, w: 178, h: 70, t: 'AJO Webhook API', s: 'platform-va7.adobe.io' },
+  { id: 'aep_send', lane: 'azure', x: 884, y: 660, w: 164, h: 70, t: 'Despacho a CDP', s: 'Streaming Ingestion' },
+  
+  { id: 'ajo_feedback', lane: 'aep', x: 14, y: 300, w: 272, h: 56, t: 'ajo_message_feedback_dataset', s: 'Delivery Nativo AJO' },
+  { id: 'ajo_tracking', lane: 'aep', x: 14, y: 366, w: 272, h: 56, t: 'ajo_channel_tracking_dataset', s: 'Tracking Inbound AJO' },
+  { id: 'http_api', lane: 'aep', x: 146, y: 440, w: 140, h: 56, t: 'Adobe HTTP API', s: 'dcs.adobedc.net' },
+  { id: 'ingest', lane: 'aep', x: 14, y: 440, w: 120, h: 56, t: 'Streaming Ingest', s: 'Data Lake AEP' },
+  { id: 'custom_ds', lane: 'aep', kind: 'dest', x: 14, y: 514, w: 272, h: 92, t: 'Whatsapp Feedback Custom DS', s: 'XDM ExperienceEvent Consolidado' },
+  
+  { id: 'meta_send', lane: 'meta', x: 1084, y: 134, w: 202, h: 76, t: 'Meta Cloud API', s: 'messages endpoint' },
+  { id: 'meta_webhook', lane: 'meta', x: 1090, y: 441, w: 196, h: 64, t: 'Meta Webhooks', s: 'Callbacks de Estados/Respuestas' },
+  
+  { id: 'recv', lane: 'user', x: 1318, y: 142, w: 262, h: 60, t: 'Cliente Recibe WhatsApp', s: 'Plantilla en Teléfono' },
+  { id: 'interact', lane: 'user', x: 1318, y: 232, w: 262, h: 56, t: 'Cliente Interactúa', s: 'Lectura o Botón Reply' },
+  { id: 'cb_delivery', lane: 'user', x: 1318, y: 472, w: 262, h: 48, t: 'Delivery Callback', s: 'statuses[0].id = wamid' },
+  { id: 'cb_tracking', lane: 'user', x: 1318, y: 538, w: 262, h: 62, t: 'Tracking Callback', s: 'messages[0].context.id = wamid' }
+];
+
+/* 3. CABLES (EDGES) */
+const EDGES = [
+  { id: 'e1', from: 'journey', to: 'split', pts: [[430, 165], [443, 165]] },
+  { id: 'e2', from: 'split', to: 'native', pts: [[460, 148], [460, 105], [496, 105]] },
+  { id: 'e3', from: 'split', to: 'custom', pts: [[460, 182], [460, 226], [496, 226]] },
+  { id: 'e4', from: 'native', to: 'meta_send', pts: [[662, 105], [1150, 105], [1150, 134]] },
+  { id: 'e5', from: 'custom', to: 'meta_send', pts: [[646, 182], [646, 172], [1084, 172]] },
+  { id: 'e6', from: 'custom', to: 'ca_corr', pts: [[662, 226], [692, 226]] },
+  { id: 'e7', from: 'ca_corr', to: 'api_corr', pts: [[848, 226], [878, 226]] },
+  { id: 'e8', from: 'api_corr', to: 'table', pts: [[966, 264], [966, 280]] },
+  { id: 'e9', from: 'table', to: 'lookup', pts: [[966, 392], [966, 404]] },
+  { id: 'e10', from: 'lookup', to: 'relay', pts: [[966, 428], [966, 446]] },
+  { id: 'e11', from: 'meta_send', to: 'recv', pts: [[1286, 172], [1318, 172]] },
+  { id: 'e12', from: 'recv', to: 'interact', pts: [[1449, 202], [1449, 232]] },
+  { id: 'e13', from: 'meta_send', to: 'meta_webhook', pts: [[1255, 210], [1255, 441]] },
+  { id: 'e14', from: 'interact', to: 'meta_webhook', pts: [[1449, 288], [1449, 451], [1286, 451]] },
+  { id: 'e15', from: 'meta_webhook', to: 'cb_delivery', pts: [[1286, 496], [1318, 496]] },
+  { id: 'e16', from: 'meta_webhook', to: 'cb_tracking', pts: [[1220, 505], [1220, 569], [1318, 569]] },
+  { id: 'e17', from: 'meta_webhook', to: 'relay', pts: [[1090, 473], [1056, 473]] },
+  { id: 'e18', from: 'relay', to: 'queue', pts: [[876, 473], [846, 473]] },
+  { id: 'e19', from: 'relay', to: 'enrich', pts: [[966, 500], [966, 524]] },
+  { id: 'e20', from: 'queue', to: 'enrich', pts: [[778, 500], [778, 547], [886, 547]] },
+  { id: 'e21', from: 'enrich', to: 'function', pts: [[966, 570], [966, 592]] },
+  { id: 'e22', from: 'function', to: 'ajo_webhook', pts: [[907, 610], [781, 610], [781, 660]] },
+  { id: 'e23', from: 'function', to: 'aep_send', pts: [[966, 628], [966, 660]] },
+  { id: 'e24', from: 'ajo_webhook', to: 'ajo_feedback', pts: [[692, 684], [646, 684], [646, 328], [286, 328]] },
+  { id: 'e25', from: 'ajo_webhook', to: 'ajo_tracking', pts: [[692, 708], [626, 708], [626, 394], [286, 394]] },
+  { id: 'e26', from: 'aep_send', to: 'http_api', pts: [[966, 730], [966, 748], [318, 748], [318, 468], [286, 468]] },
+  { id: 'e27', from: 'http_api', to: 'ingest', pts: [[146, 468], [134, 468]] },
+  { id: 'e28', from: 'ingest', to: 'custom_ds', pts: [[74, 496], [74, 514]] }
+];
+
+/* Virtual Edge visible solo en nativo */
+const VEDGES = [
+  { id: 'v_native_ctx', from: 'native', to: 'ca_corr', pts: [[662, 115], [674, 115], [674, 210], [692, 210]] }
+];
+
+/* 4. DEFINICIÓN DE RUTAS Y PASOS CON PAYLOADS JSON EN TIEMPO REAL */
+const TOURS = [
+  /* CAMINO NATIVO (Tour 0) */
+  {
+    name: "Camino 1: Nativo WhatsApp (AJO Nativo)",
+    steps: [
+      {
+        node: "journey",
+        title: "01. Disparo del Journey Nativo",
+        desc: "El Journey de AJO evalúa la audiencia ('Test Profiles') y toma la rama de canal Nativo.",
+        origin: "AJO Journey", target: "Native Action", proto: "Internal Event",
+        json: {
+          journeyId: "6a875a91",
+          journeyVersionId: "1",
+          profile: { CICID: "diegoparraadobe", phone: "+51944968558" },
+          channel: "https://ns.adobe.com/xdm/channel-types/whatsApp"
+        }
+      },
+      {
+        node: "native",
+        route: ["journey", "split", "native"],
+        title: "02. Envío con Integración Nativa",
+        desc: "AJO genera el envío nativamente y guarda el contexto en su propio motor.",
+        origin: "AJO Native Action", target: "Meta API", proto: "HTTPS POST",
+        json: {
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: "51944968558",
+          type: "template",
+          template: { name: "loans", language: { code: "es_PE" } }
+        }
+      },
+      {
+        node: "meta_send",
+        route: ["native", "meta_send"],
+        title: "03. Respuesta de Meta (WAMID Asignado)",
+        desc: "Meta procesa el mensaje y devuelve el WAMID en messages[0].id.",
+        origin: "Meta Cloud API", target: "WhatsApp Network", proto: "HTTPS 200 OK",
+        json: {
+          messages: [{ id: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA", message_status: "accepted" }]
+        }
+      },
+      {
+        node: "recv",
+        route: ["meta_send", "recv"],
+        title: "04. Recepción en WhatsApp del Usuario",
+        desc: "El cliente recibe la plantilla en su teléfono móvil.",
+        origin: "Meta Server", target: "Dispositivo Móvil", proto: "WhatsApp Protocol",
+        json: {
+          phone: "51944968558",
+          template: "loans",
+          bodyText: "Hola Diego, tienes un préstamo preaprobado de S/ 15,000."
+        }
+      },
+      {
+        node: "interact",
+        route: ["recv", "interact"],
+        title: "05. Interacción del Usuario",
+        desc: "El usuario abre el mensaje (read) o presiona el botón interactivo.",
+        origin: "Dispositivo Móvil", target: "Meta Server", proto: "Inbound Action",
+        json: {
+          action: "read / button_reply",
+          selectedButton: { id: "BTN_01", title: "Quiero más información" }
+        }
+      },
+      {
+        node: "meta_webhook",
+        route: ["interact", "meta_webhook"],
+        title: "06. Callback Notificado por Meta",
+        desc: "Meta envía el callback a la URL única del Middleware en Azure.",
+        origin: "Meta Webhook", target: "Azure Function 2", proto: "HTTPS POST",
+        json: {
+          object: "whatsapp_business_account",
+          entry: [{
+            changes: [{
+              value: {
+                statuses: [{
+                  id: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA",
+                  status: "read",
+                  timestamp: "1790343594",
+                  recipient_id: "51944968558"
+                }]
+              }
+            }]
+          }]
+        }
+      },
+      {
+        node: "relay",
+        route: ["meta_webhook", "relay"],
+        title: "07. Recepción y Validación en Azure Function 2",
+        desc: "Valida la firma HMAC-SHA256 (X-Hub-Signature-256). Al ser NATIVE, orquesta el Fan-Out.",
+        origin: "Azure Gateway", target: "Enrichment Engine", proto: "Java 21 In-Memory",
+        json: {
+          signatureVerified: true,
+          executionType: "NATIVE",
+          wamid: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA"
+        }
+      },
+      {
+        node: "function",
+        route: ["relay", "queue", "enrich", "function"],
+        title: "08. Distribución Fan-Out (2 Salidas)",
+        desc: "La función despacha el evento tanto al AJO Webhook nativo como a Adobe CDP Streaming.",
+        origin: "Azure Function Router", target: "AJO Webhook + AEP", proto: "Dual POST",
+        json: {
+          branch_1: "Reenvío Payload Raw a https://platform-va7.adobe.io/journey/webhooks/ingest/...",
+          branch_2: "Envío XDM ExperienceEvent normalizado a https://dcs.adobedc.net/collection/..."
+        }
+      },
+      {
+        node: "ajo_feedback",
+        route: ["function", "ajo_webhook", "ajo_feedback"],
+        title: "09. Persistencia en Dataset Nativo AJO",
+        desc: "El AJO Webhook recibe el callback nativo y lo persiste en ajo_message_feedback_event_dataset.",
+        origin: "AJO Webhook", target: "AJO System Dataset", proto: "Native Ingest",
+        json: {
+          dataset: "ajo_message_feedback_event_dataset",
+          feedbackStatus: "read",
+          reactionMessageID: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA",
+          CICID: "diegoparraadobe"
+        }
+      },
+      {
+        node: "custom_ds",
+        route: ["function", "aep_send", "http_api", "ingest", "custom_ds"],
+        title: "10. Persistencia Paralela en Dataset Custom CDP",
+        desc: "El evento también queda consolidado en el Dataset Custom corporativo de BCP en AEP.",
+        origin: "AEP Streaming", target: "Whatsapp Feedback Custom DS", proto: "XDM Persist",
+        json: {
+          _id: "0f3b4d52-99d5-4c1a-bf08-0df9da2ce801",
+          eventType: "bcp.whatsapp.delivery.read",
+          _bcp: {
+            identity: { customerId: "diegoparraadobe" },
+            delivery: { status: "read" },
+            correlation: { executionType: "NATIVE", correlationStatus: "CORRELATED" }
+          }
+        }
+      }
+    ]
+  },
+
+  /* CAMINO CUSTOM ACTION (Tour 1) */
+  {
+    name: "Camino 2: Custom Action (CA1 + CA2 + Azure Cosmos)",
+    steps: [
+      {
+        node: "journey",
+        title: "01. Disparo de Custom Action en AJO",
+        desc: "El Journey de AJO inicia el envío mediante la Custom Action CA1 ('Envío Whatsapp').",
+        origin: "AJO Journey", target: "CA1 Meta", proto: "Custom Action 1",
+        json: {
+          journeyId: "6a875a91",
+          profileId: "diegoparraadobe",
+          templateName: "loans",
+          recipient: "51944968558"
+        }
+      },
+      {
+        node: "custom",
+        route: ["journey", "split", "custom"],
+        title: "02. CA1 Ejecuta Envío en Meta y Obtiene WAMID",
+        desc: "CA1 llama a Meta Cloud API y captura el WAMID devuelto en messages[0].id.",
+        origin: "CA1", target: "Meta API", proto: "HTTPS POST",
+        json: {
+          request: {
+            messaging_product: "whatsapp",
+            to: "51944968558",
+            template: { name: "o_cef_mm_p_automatico_util_v3" }
+          },
+          response_meta: {
+            messages: [{ id: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA", message_status: "accepted" }]
+          }
+        }
+      },
+      {
+        node: "ca_corr",
+        route: ["custom", "ca_corr"],
+        title: "03. CA2 Despacha Contexto AJO al Middleware",
+        desc: "Inmediatamente después, CA2 ('Datos AJO a Middleware') envía el WAMID con 13 metadatos a Azure.",
+        origin: "AJO CA2", target: "POST /api/ajo-context", proto: "HTTPS POST (x-functions-key)",
+        json: {
+          wamid: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA",
+          recipient: "51944968558",
+          messageStatus: "accepted",
+          profileId: "diegoparraadobe",
+          namespace: "CICID",
+          journeyId: "6a875a91",
+          journeyVersionId: "12",
+          journeyVersionName: "Loan Offer Journey v12",
+          journeyNodeId: "send_whatsapp_offer",
+          templateName: "loans",
+          type: "CUSTOM"
+        }
+      },
+      {
+        node: "api_corr",
+        route: ["ca_corr", "api_corr"],
+        title: "04. Azure Function 1 Procesa y Prepara Inserción",
+        desc: "AjoContextFunction valida el payload de entrada y prepara el documento NoSQL.",
+        origin: "AjoContextFunction", target: "CosmosService", proto: "Java 21 Worker",
+        json: {
+          status: "STORED",
+          partitionKey: "/wamid",
+          ttlSeconds: 604800,
+          correlationId: "corr-384848484"
+        }
+      },
+      {
+        node: "table",
+        route: ["api_corr", "table"],
+        title: "05. Persistencia en Cosmos DB (message-correlation)",
+        desc: "El documento se almacena en Cosmos DB particionado por /wamid con tiempo de vida (TTL) de 7 días.",
+        origin: "Azure SDK", target: "Cosmos DB", proto: "NoSQL Upsert (<10ms)",
+        json: {
+          id: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA",
+          wamid: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA",
+          customerId: "diegoparraadobe",
+          recipient: "51944968558",
+          journeyId: "6a875a91",
+          journeyVersionId: "12",
+          templateName: "loans",
+          type: "CUSTOM",
+          _ttl: 604800
+        }
+      },
+      {
+        node: "meta_send",
+        route: ["custom", "meta_send"],
+        title: "06. Meta Despacha el Mensaje a la Red",
+        desc: "Meta envía el mensaje al usuario a través de la infraestructura de WhatsApp.",
+        origin: "Meta Cloud", target: "WhatsApp Gateway", proto: "Encrypted Message",
+        json: {
+          wamid: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA",
+          recipient: "51944968558",
+          category: "MARKETING"
+        }
+      },
+      {
+        node: "recv",
+        route: ["meta_send", "recv"],
+        title: "07. Recepción en Dispositivo del Cliente",
+        desc: "El cliente recibe la notificación y el carrusel/plantilla en su app de WhatsApp.",
+        origin: "Red WhatsApp", target: "Smartphone", proto: "Device Push",
+        json: {
+          status: "delivered",
+          timestamp: 1790600000
+        }
+      },
+      {
+        node: "interact",
+        route: ["recv", "interact"],
+        title: "08. El Cliente Interactúa (Read / Button / Text)",
+        desc: "El usuario abre el mensaje o presiona un botón rápido ('Quiero más información').",
+        origin: "App WhatsApp", target: "Meta Webhooks", proto: "Inbound User Action",
+        json: {
+          action: "button_reply",
+          buttonPayload: "BTN_01",
+          buttonText: "Quiero más información"
+        }
+      },
+      {
+        node: "meta_webhook",
+        route: ["interact", "meta_webhook"],
+        title: "09. Meta Envía Callback a Azure Function 2",
+        desc: "Meta dispara el callback al único endpoint publicado en Azure: POST /api/meta-webhook.",
+        origin: "Meta Webhook", target: "Azure Function 2", proto: "HTTPS POST (HMAC-SHA256)",
+        json: {
+          entry: [{
+            changes: [{
+              value: {
+                messages: [{
+                  context: { id: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA" },
+                  from: "51944968558",
+                  id: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA5RkVFMjMwM0JBQ0ExMUEA",
+                  type: "button",
+                  button: { payload: "BTN_01", text: "Quiero más información" }
+                }]
+              }
+            }]
+          }]
+        }
+      },
+      {
+        node: "lookup",
+        route: ["meta_webhook", "relay", "lookup"],
+        title: "10. Azure Function Valida y Hace Lookup en Cosmos DB",
+        desc: "Extrae messages[0].context.id (o statuses[0].id) y recupera el contexto de Cosmos DB en <10 ms.",
+        origin: "ProcessMetaWebhookService", target: "Cosmos DB", proto: "Read Item by PartitionKey",
+        json: {
+          lookupKey: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA",
+          lookupStatus: "SUCCESS",
+          recuperado: {
+            customerId: "diegoparraadobe",
+            journeyId: "6a875a91",
+            journeyVersionName: "Loan Offer Journey v12"
+          }
+        }
+      },
+      {
+        node: "enrich",
+        route: ["lookup", "enrich"],
+        title: "11. Fusión de Variables (Meta + Cosmos DB)",
+        desc: "XdmMapper une los datos de Meta (timestamp, status, botón) con los de AJO (customerId, journey).",
+        origin: "XdmMapper", target: "XDM Object Builder", proto: "Memory Transform",
+        json: {
+          meta_data: { wamid: "wamid.OUTBOUND", reply: "Quiero más información", buttonId: "BTN_01" },
+          ajo_data: { customerId: "diegoparraadobe", journeyId: "6a875a91", version: "12" },
+          fusion: "XDM ExperienceEvent Completo (27 atributos)"
+        }
+      },
+      {
+        node: "custom_ds",
+        route: ["enrich", "function", "aep_send", "http_api", "ingest", "custom_ds"],
+        title: "12. Ingesta Final en Adobe CDP (Dataset Custom BCP)",
+        desc: "Al ser CUSTOM, se despacha a AEP Streaming Ingestion y NO a AJO Webhook (evita duplicidad).",
+        origin: "CdpService", target: "dcs.adobedc.net", proto: "Streaming Ingestion HTTP API",
+        json: {
+          _id: "0f3b4d52-99d5-4c1a-bf08-0df9da2ce801",
+          timestamp: "2026-10-12T15:32:11Z",
+          eventType: "bcp.whatsapp.tracking.button_reply",
+          _bcp: {
+            identity: { customerId: "diegoparraadobe" },
+            tracking: { type: "button_reply", reply: "Quiero más información", buttonId: "BTN_01" },
+            message: { wamId: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA" },
+            journeyContext: { journeyId: "6a875a91", journeyVersionId: "12" },
+            correlation: { executionType: "CUSTOM", correlationStatus: "CORRELATED" }
+          }
+        }
+      }
+    ]
+  }
+];
+
+/* 5. VARIABLES DE ESTADO */
+let currentPathIdx = 1; // 1 = Custom, 0 = Nativo
+let currentStepIdx = 0;
+let autoPlayInterval = null;
+let currentEventVariant = "delivery";
+let zoomLevel = 1;
+
+/* 6. CONSTRUCCIÓN DEL MAPA SVG */
+function buildMap() {
+  // Lanes
+  let lanesHtml = '';
+  LANES.forEach(l => {
+    lanesHtml += `
+      <rect class="lane-bg" x="${l.x}" y="0" width="${l.w}" height="850" style="fill:var(--${l.id})"/>
+      ${l.x > 0 ? `<line class="lane-sep" x1="${l.x}" y1="0" x2="${l.x}" y2="850"/>` : ''}
+    `;
+  });
+  lanesHtml += `<line class="lane-sep" x1="0" y1="56" x2="1600" y2="56"/>`;
+  document.getElementById("lanesG").innerHTML = lanesHtml;
+
+  // Wires (Edges)
+  let wiresHtml = '';
+  EDGES.forEach(e => {
+    wiresHtml += `<path class="wire ${e.dash ? 'dash' : ''} ${e.anno ? 'anno' : ''}" data-edge="${e.id}" d="${buildSvgPath(e.pts)}"/>`;
+  });
+  VEDGES.forEach(e => {
+    wiresHtml += `<path class="wire vwire" data-edge="${e.id}" d="${buildSvgPath(e.pts)}"/>`;
+  });
+  document.getElementById("wiresG").innerHTML = wiresHtml;
+
+  // Nodes HTML
+  let nodesHtml = '';
+  LANES.forEach(l => {
+    nodesHtml += `
+      <div class="lane-head" style="left:${l.x}px; width:${l.w}px; --lane:var(--${l.id})">
+        <span class="lh-name">${l.name}</span>
+        <span class="lh-role">${l.role}</span>
+      </div>
+    `;
+  });
+
+  NODES.forEach(n => {
+    const k = n.kind || 'step';
+    let inner = '';
+    if (k === 'decision') {
+      inner = `<span class="dia"></span>`;
+    } else {
+      inner = `
+        <div class="txt">
+          <span class="t">${n.t}</span>
+          ${n.s ? `<span class="s">${n.s}</span>` : ''}
+          ${n.cd ? `<span class="cd">${n.cd}</span>` : ''}
+        </div>
+      `;
+    }
+
+    nodesHtml += `
+      <button type="button" class="node k-${k}" data-node="${n.id}" 
+              style="left:${n.x}px; top:${n.y}px; width:${n.w}px; height:${n.h}px; --lane:var(--${n.lane});"
+              onclick="onNodeClick('${n.id}')">
+        ${inner}
+      </button>
+    `;
+  });
+
+  document.getElementById("nodesLayer").innerHTML = nodesHtml;
+}
+
+function buildSvgPath(pts) {
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [x0, y0] = pts[i - 1];
+    const [x1, y1] = pts[i];
+    const [x2, y2] = pts[i + 1];
+    const d1 = Math.hypot(x1 - x0, y1 - y0);
+    const d2 = Math.hypot(x2 - x1, y2 - y1);
+    const r = Math.min(8, d1 / 2, d2 / 2);
+    d += ` L${x1 - (x1 - x0) / d1 * r},${y1 - (y1 - y0) / d1 * r} Q${x1},${y1} ${x1 + (x2 - x1) / d2 * r},${y1 + (y2 - y1) / d2 * r}`;
+  }
+  const last = pts[pts.length - 1];
+  d += ` L${last[0]},${last[1]}`;
+  return d;
+}
+
+/* 7. MANEJO DE CAMINOS Y RESALTADO DINÁMICO */
+function switchPath(pathIdx) {
+  currentPathIdx = pathIdx;
+  currentStepIdx = 0;
+  
+  document.body.classList.toggle("mode-native", pathIdx === 0);
+  document.body.classList.toggle("mode-custom", pathIdx === 1);
+  
+  document.querySelectorAll(".path-btn").forEach((b, i) => {
+    b.classList.toggle("active", i === pathIdx);
+  });
+
+  document.getElementById("heroPathTitle").textContent = pathIdx === 0 ? "Camino Nativo (AJO)" : "Camino Custom Action";
+  document.getElementById("activeRouteName").textContent = pathIdx === 0 ? "RUTA NATIVA" : "RUTA CUSTOM";
+
+  updateStepView();
+}
+
+function updateStepView() {
+  const tour = TOURS[currentPathIdx];
+  const step = tour.steps[currentStepIdx];
+  
+  // Update step indicators
+  document.getElementById("stepCounterBadge").textContent = `PASO ${currentStepIdx + 1} DE ${tour.steps.length}`;
+  document.getElementById("stepTitleLive").textContent = step.title;
+  document.getElementById("stepDescLive").textContent = step.desc;
+  document.getElementById("tagOriginNode").textContent = `Origen: ${step.origin}`;
+  document.getElementById("tagTargetNode").textContent = `Destino: ${step.target}`;
+  document.getElementById("tagProto").textContent = `Protocolo: ${step.proto}`;
+  document.getElementById("jsonPayloadLabel").textContent = `JSON en Tránsito: [${step.title}]`;
+  
+  // Format JSON payload
+  document.getElementById("liveJsonCode").textContent = JSON.stringify(step.json, null, 2);
+  
+  // Synchronize Cosmos DB Doc
+  updateCosmosLiveView(step);
+
+  // Synchronize CDP Doc
+  updateCdpLiveView(step);
+
+  // Highlight SVG Wires and Nodes
+  highlightPath(step);
+
+  // Animate Token & Ring
+  animateTokenToNode(step.node);
+
+  // Scroll to node if off-screen
+  ensureNodeVisible(step.node);
+}
+
+function highlightPath(step) {
+  // Clear all
+  document.querySelectorAll(".node").forEach(n => n.classList.remove("active-step", "dim"));
+  document.querySelectorAll(".wire").forEach(w => w.classList.remove("path", "hl", "dim"));
+
+  // Collect route nodes
+  const activeNodes = new Set(step.route || [step.node]);
+  activeNodes.add(step.node);
+
+  // Mark all unselected nodes as dim
+  document.querySelectorAll(".node").forEach(n => {
+    const id = n.dataset.node;
+    if (id === step.node) {
+      n.classList.add("active-step");
+    } else if (!activeNodes.has(id)) {
+      n.classList.add("dim");
+    }
+  });
+
+  // Activate wires
+  const r = step.route || [step.node];
+  for (let i = 0; i < r.length - 1; i++) {
+    const from = r[i];
+    const to = r[i + 1];
+    const edge = findEdge(from, to);
+    if (edge) {
+      const el = document.querySelector(`[data-edge="${edge.id}"]`);
+      if (el) {
+        el.classList.add("path", "hl");
+      }
+    }
+  }
+
+  // Dim other wires
+  document.querySelectorAll(".wire").forEach(w => {
+    if (!w.classList.contains("path")) {
+      w.classList.add("dim");
+    }
+  });
+}
+
+function findEdge(from, to) {
+  return EDGES.find(e => (e.from === from && e.to === to) || (e.from === to && e.to === from)) ||
+         VEDGES.find(e => (e.from === from && e.to === to));
+}
+
+function animateTokenToNode(nodeId) {
+  const node = NODES.find(n => n.id === nodeId);
+  if (!node) return;
+
+  const token = document.getElementById("token");
+  const ring = document.getElementById("ring");
+
+  const cx = node.x + node.w / 2;
+  const cy = node.y + node.h / 2;
+
+  token.setAttribute("cx", cx);
+  token.setAttribute("cy", cy);
+  token.classList.add("on");
+
+  ring.setAttribute("cx", cx);
+  ring.setAttribute("cy", cy);
+  ring.classList.remove("go");
+  void ring.getBBox();
+  ring.classList.add("go");
+}
+
+function ensureNodeVisible(nodeId) {
+  const node = NODES.find(n => n.id === nodeId);
+  if (!node) return;
+
+  const scroller = document.getElementById("scroller");
+  const targetX = node.x * zoomLevel - scroller.clientWidth / 2 + 100;
+  scroller.scrollTo({ left: Math.max(0, targetX), behavior: "smooth" });
+}
+
+function onNodeClick(nodeId) {
+  const tour = TOURS[currentPathIdx];
+  const stepIdx = tour.steps.findIndex(s => s.node === nodeId);
+  if (stepIdx !== -1) {
+    currentStepIdx = stepIdx;
+    updateStepView();
+  } else {
+    // If node is in the other path, offer switch
+    animateTokenToNode(nodeId);
+  }
+}
+
+/* 8. CONTROLES DEL REPRODUCTOR */
+function nextStep() {
+  const tour = TOURS[currentPathIdx];
+  if (currentStepIdx < tour.steps.length - 1) {
+    currentStepIdx++;
+    updateStepView();
+  } else {
+    // Loop
+    currentStepIdx = 0;
+    updateStepView();
+  }
+}
+
+function prevStep() {
+  if (currentStepIdx > 0) {
+    currentStepIdx--;
+    updateStepView();
+  }
+}
+
+function toggleAutoPlay() {
+  const btn = document.getElementById("btnAutoPlay");
+  if (autoPlayInterval) {
+    clearInterval(autoPlayInterval);
+    autoPlayInterval = null;
+    btn.innerHTML = "▶ Reproducir Todo";
+    btn.classList.remove("primary");
+    btn.classList.add("ghost");
+  } else {
+    btn.innerHTML = "⏸ Pausar Flujo";
+    btn.classList.remove("ghost");
+    btn.classList.add("primary");
+    autoPlayInterval = setInterval(() => {
+      nextStep();
+    }, 2800);
+  }
+}
+
+function switchEventVariant(variant) {
+  currentEventVariant = variant;
+  document.getElementById("btnEvtDelivery").classList.toggle("active", variant === "delivery");
+  document.getElementById("btnEvtButton").classList.toggle("active", variant === "button");
+  document.getElementById("btnEvtText").classList.toggle("active", variant === "text");
+  updateStepView();
+}
+
+/* 9. ACTUALIZACIÓN DE TABLAS EN TIEMPO REAL */
+function updateCosmosLiveView(step) {
+  const isCustom = currentPathIdx === 1;
+  const isStoredYet = isCustom && currentStepIdx >= 4;
+
+  const cosmosBadge = document.getElementById("cosmosStateBadge");
+  const cosmosDocEl = document.getElementById("cosmosDocLive");
+
+  if (!isCustom) {
+    cosmosBadge.textContent = "RAMA NATIVA (NO REQUIERE LOOKUP)";
+    cosmosDocEl.textContent = 
+`// Al tratarse de un envío por canal Nativo de AJO:
+// El motor nativo de Journey Optimizer ya conoce el contexto del mensaje.
+// Por ende, el lookup en Cosmos DB es opcional y no bloquea el flujo.`;
+    return;
+  }
+
+  if (isStoredYet) {
+    cosmosBadge.textContent = "ESTADO: DOCUMENTO ALMACENADO (STORED)";
+    const doc = {
+      id: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA",
+      wamid: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA",
+      customerId: "diegoparraadobe",
+      recipient: "51944968558",
+      journeyId: "6a875a91",
+      journeyVersionId: "12",
+      journeyVersionName: "Loan Offer Journey v12",
+      journeyNodeId: "send_whatsapp_offer",
+      templateName: "loans",
+      type: "CUSTOM",
+      _ttl: 604800,
+      _ts: 1791508390
+    };
+    cosmosDocEl.textContent = JSON.stringify(doc, null, 2);
+  } else {
+    cosmosBadge.textContent = "ESTADO: ESPERANDO DESPACHO CA2";
+    cosmosDocEl.textContent = 
+`// Cosmos DB aún no contiene el documento para este WAMID.
+// Se insertará tan pronto AJO ejecute la Custom Action 2 (Paso 03 - 05).`;
+  }
+}
+
+function updateCdpLiveView(step) {
+  const cdpBadge = document.getElementById("cdpStateBadge");
+  const cdpDocEl = document.getElementById("cdpDocLive");
+
+  const isFinalStep = currentStepIdx >= (TOURS[currentPathIdx].steps.length - 2);
+
+  if (isFinalStep) {
+    cdpBadge.textContent = "STREAMING INGESTION: 200 OK";
+    const xdmDoc = {
+      _id: "0f3b4d52-99d5-4c1a-bf08-0df9da2ce801",
+      timestamp: "2026-10-12T15:32:11Z",
+      eventType: currentEventVariant === "button" ? "bcp.whatsapp.tracking.button_reply" : 
+                 currentEventVariant === "text" ? "bcp.whatsapp.tracking.text_reply" : "bcp.whatsapp.delivery.read",
+      _bcp: {
+        identity: { customerId: "diegoparraadobe" },
+        delivery: { status: "read" },
+        tracking: currentEventVariant === "button" ? { type: "button_reply", reply: "Quiero más información", buttonId: "BTN_01" } : null,
+        message: {
+          channel: "whatsapp",
+          category: "MARKETING",
+          templateName: "loans",
+          wamId: "wamid.HBgLNTE5NDQ5Njg1NTgVAgARGBIzQTA4RkNEMUVFRDZFOEIzODIA"
+        },
+        journeyContext: { journeyId: "6a875a91", journeyVersionId: "12" },
+        correlation: {
+          executionType: currentPathIdx === 1 ? "CUSTOM" : "NATIVE",
+          correlationStatus: "CORRELATED"
+        }
+      }
+    };
+    cdpDocEl.textContent = JSON.stringify(xdmDoc, null, 2);
+  } else {
+    cdpBadge.textContent = "EN TRÁNSITO POR AZURE MIDDLEWARE";
+    cdpDocEl.textContent = 
+`// El evento XDM está siendo enriquecido en Azure Memory.
+// Se emitirá hacia https://dcs.adobedc.net en el Paso Final.`;
+  }
+}
+
+function copyJsonPayload() {
+  const code = document.getElementById("liveJsonCode").textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    alert("¡JSON en tránsito copiado al portapapeles!");
+  });
+}
+
+function zoomMap(delta) {
+  zoomLevel = Math.max(0.65, Math.min(1.4, zoomLevel + delta));
+  document.getElementById("stage").style.transform = `scale(${zoomLevel})`;
+  document.getElementById("sizer").style.width = `${1600 * zoomLevel}px`;
+  document.getElementById("sizer").style.height = `${850 * zoomLevel}px`;
+}
+
+function resetZoom() {
+  const fw = document.getElementById("scroller").clientWidth || 1200;
+  zoomLevel = Math.max(0.7, Math.min(1.1, fw / 1600));
+  document.getElementById("stage").style.transform = `scale(${zoomLevel})`;
+  document.getElementById("sizer").style.width = `${1600 * zoomLevel}px`;
+  document.getElementById("sizer").style.height = `${850 * zoomLevel}px`;
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute("data-theme");
+  const target = current === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", target);
+  document.getElementById("themeIcon").textContent = target === "dark" ? "☀️" : "🌙";
+  document.getElementById("themeToggle").innerHTML = target === "dark" ? 
+    '<span>☀️</span> Modo Claro' : '<span>🌙</span> Modo Oscuro';
+}
+
+/* 10. INICIALIZACIÓN */
+window.addEventListener("DOMContentLoaded", () => {
+  buildMap();
+  resetZoom();
+  switchPath(1); // Default to Custom Action
+});
+
+window.addEventListener("resize", () => {
+  resetZoom();
+});
+</script>
+
+</body>
+</html>

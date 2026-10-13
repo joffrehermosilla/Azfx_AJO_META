@@ -2,6 +2,15 @@
 
 Middleware cloud-native de alta concurrencia y baja latencia (< 300 ms) desarrollado en **Java 21** sobre **Azure Functions** y **Azure Cosmos DB NoSQL**. Conecta y correlaciona de manera bidireccional los envíos de campañas desde **Adobe Journey Optimizer (AJO)**, la plataforma **Meta WhatsApp Business Platform (Cloud API)** y **Adobe Experience Platform (AEP / CDP)**.
 
+> **ESTADO DE VALIDACIÓN OPERATIVA: HOMOLOGADO Y OPERATIVO EN AZURE**  
+> Se ha validado exitosamente el flujo de extremo a extremo:
+> 1. Al enviar plantillas desde AJO (CA1 + CA2), el contexto se almacena inmediatamente en Cosmos DB (`bcp-whatsapp` / `message-correlation`) respondiendo `{"status":"STORED"}`.
+> 2. Al retornar los callbacks de entrega (`read`, `delivered`) o interacciones de botones (`button_reply`), Azure Function 2 resuelve el WAMID contra Cosmos DB, mapea el esquema **XDM ExperienceEvent BCP** (~27 atributos) y **golpea exitosamente el endpoint de Streaming Ingestion de Adobe CDP (`dcs.adobedc.net`) con HTTP 200 OK**, respondiendo a Meta `{"status":"OK","processed":1}`.
+
+### 📚 Documentación Técnica Asociada en el Repositorio
+* **Documento Word Técnico Oficial:** [`Guia_Tecnica_Arquitectura_BCP_AJO_WhatsApp_Azure_CDP.docx`](./Guia_Tecnica_Arquitectura_BCP_AJO_WhatsApp_Azure_CDP.docx) (Especificación completa para desarrolladores y DevOps, sin secretos expuestos).
+* **Simulador y Visualizador de Parámetros:** [`BCP_Whatsapp_Trazabilidad_Parametros.html`](../../BCP_Whatsapp_Trazabilidad_Parametros.html) (Dashboard interactivo con visualización animada de cables y JSONs dinámicos en tránsito).
+
 ---
 
 ## 📑 Tabla de Contenidos

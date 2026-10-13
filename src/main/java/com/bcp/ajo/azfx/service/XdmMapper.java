@@ -6,11 +6,6 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -20,7 +15,7 @@ import java.util.UUID;
  * XdmMapper — Construye el XDM ExperienceEvent para Adobe CDP
  *
  * Contrato C: XDM custom BCP basado en el schema:
- *   eventType: "messaging.whatsapp.log"
+ *   eventType: dinámico según taxonomía BCP
  *   _bcp.messaging.whatsapp.*
  *
  * Taxonomía de eventType:
@@ -32,11 +27,6 @@ import java.util.UUID;
  *   bcp.whatsapp.tracking.text_reply
  *   bcp.whatsapp.consent.opt_in
  *   bcp.whatsapp.consent.opt_out
- *
- * Regla de WAMID:
- *   DELIVERY  → statuses[].id          = WAMID OUTBOUND
- *   TRACKING  → messages[].context.id  = WAMID OUTBOUND
- *               messages[].id          = WAMID INBOUND (reply)
  */
 public class XdmMapper {
 
@@ -46,14 +36,6 @@ public class XdmMapper {
 
     /**
      * Construye el XDM para un evento de DELIVERY (sent/delivered/read/failed).
-     *
-     * @param correlation Documento de Cosmos (contexto AJO).
-     * @param status      Estado de Meta: "sent" | "delivered" | "read" | "failed".
-     * @param wamid       WAMID del mensaje outbound (statuses[].id).
-     * @param metaTimestamp Timestamp de Meta (epoch seconds como String).
-     * @param errorCode   Código de error Meta (null si no hay error).
-     * @param errorMsg    Mensaje de error Meta (null si no hay error).
-     * @return Map representando el XDM ExperienceEvent.
      */
     public Map<String, Object> buildDeliveryXdm(
         CorrelationDocument correlation,
@@ -69,10 +51,15 @@ public class XdmMapper {
         Map<String, Object> xdm = new LinkedHashMap<>();
         xdm.put("_id", UUID.randomUUID().toString());
         xdm.put("timestamp", now);
-        xdm.put("eventType", eventType);
+        xdm.put("eventType", eventType); // <-- Corregido y aplicado correctamente
 
         // _bcp root
         Map<String, Object> bcp = new LinkedHashMap<>();
+
+        // _bcp.event
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("name", eventType);
+        bcp.put("event", event);
 
         // _bcp.identity
         Map<String, Object> identity = new LinkedHashMap<>();
@@ -95,11 +82,6 @@ public class XdmMapper {
         messaging.put("whatsapp", whatsapp);
         bcp.put("messaging", messaging);
 
-        // _bcp.event
-        Map<String, Object> event = new LinkedHashMap<>();
-        event.put("name", "messaging.whatsapp.log");
-        bcp.put("event", event);
-
         xdm.put("_bcp", bcp);
 
         log.info("[XDM] Delivery event construido — eventType={} wamid={} customerId={}",
@@ -109,15 +91,6 @@ public class XdmMapper {
 
     /**
      * Construye el XDM para un evento de TRACKING (button_reply / text_reply).
-     *
-     * @param correlation   Documento de Cosmos (contexto AJO).
-     * @param wamidOutbound WAMID del mensaje original (messages[].context.id).
-     * @param wamidInbound  WAMID de la respuesta del usuario (messages[].id).
-     * @param metaTimestamp Timestamp de Meta.
-     * @param trackingType  "button_reply" | "text_reply".
-     * @param reply         Texto de la respuesta del usuario.
-     * @param buttonId      ID del botón (solo button_reply).
-     * @param buttonTitle   Título del botón (solo button_reply).
      */
     public Map<String, Object> buildTrackingXdm(
         CorrelationDocument correlation,
@@ -137,11 +110,16 @@ public class XdmMapper {
         Map<String, Object> xdm = new LinkedHashMap<>();
         xdm.put("_id", UUID.randomUUID().toString());
         xdm.put("timestamp", now);
-        xdm.put("eventType", eventType);
+        xdm.put("eventType", eventType); // <-- Corregido y aplicado correctamente
 
         Map<String, Object> bcp = new LinkedHashMap<>();
 
-        // identity
+        // _bcp.event
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("name", eventType);
+        bcp.put("event", event);
+
+        // _bcp.identity
         Map<String, Object> identity = new LinkedHashMap<>();
         identity.put("customerId", correlation != null ? correlation.getCustomerId() : null);
         bcp.put("identity", identity);
@@ -152,7 +130,7 @@ public class XdmMapper {
         // _bcp.messaging.whatsapp.message — agrega wamid inbound
         @SuppressWarnings("unchecked")
         Map<String, Object> message = (Map<String, Object>) whatsapp.get("message");
-        message.put("messageId", wamidInbound); // WAMID de la respuesta inbound
+        message.put("messageId", wamidInbound);
 
         // _bcp.messaging.whatsapp.tracking
         Map<String, Object> tracking = new LinkedHashMap<>();
@@ -165,10 +143,6 @@ public class XdmMapper {
         Map<String, Object> messaging = new LinkedHashMap<>();
         messaging.put("whatsapp", whatsapp);
         bcp.put("messaging", messaging);
-
-        Map<String, Object> event = new LinkedHashMap<>();
-        event.put("name", "messaging.whatsapp.log");
-        bcp.put("event", event);
 
         xdm.put("_bcp", bcp);
 
@@ -193,13 +167,12 @@ public class XdmMapper {
         audit.put("source",            "meta_webhook");
         whatsapp.put("audit", audit);
 
-        // message
-        Map<String, Object> message = new LinkedHashMap<>();
-        message.put("wamId",        wamid);
-        message.put("templateName", c != null ? c.getTemplateName()    : null);
-        message.put("templateWamId",c != null ? c.getTemplateName()    : null); // templateWamId si lo tienes
-        message.put("messageId",    null); // se completa en tracking
-        whatsapp.put("message", message);
+        // correlation
+        Map<String, Object> corr = new LinkedHashMap<>();
+        corr.put("correlationId",     c != null ? c.getCorrelationId()  : null);
+        corr.put("correlationStatus", c != null ? "CORRELATED" : "UNCORRELATED");
+        corr.put("executionType",     c != null ? c.getExecutionType()  : "UNKNOWN");
+        whatsapp.put("correlation", corr);
 
         // journeyContext
         Map<String, Object> jCtx = new LinkedHashMap<>();
@@ -210,12 +183,21 @@ public class XdmMapper {
         jCtx.put("journeyActionId",    c != null ? c.getJourneyActionId()  : null);
         whatsapp.put("journeyContext", jCtx);
 
-        // correlation
-        Map<String, Object> corr = new LinkedHashMap<>();
-        corr.put("correlationId",     c != null ? c.getCorrelationId()  : null);
-        corr.put("correlationStatus", c != null ? "CORRELATED" : "UNCORRELATED");
-        corr.put("executionType",     c != null ? c.getExecutionType()  : "UNKNOWN");
-        whatsapp.put("correlation", corr);
+        // message
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("campaignId",    c != null ? c.getCampaignId()    : null);
+        message.put("messageId",     null); 
+        message.put("templateName",  c != null ? c.getTemplateName()  : null);
+        message.put("templateWamId", c != null ? c.getTemplateName()  : null);
+        message.put("wamId",         wamid);
+        whatsapp.put("message", message);
+
+        // messageProfile
+        Map<String, Object> messageProfile = new LinkedHashMap<>();
+        messageProfile.put("channel",          "whatsapp");
+        messageProfile.put("isTestExecution",  false);
+        messageProfile.put("messageProfileId", c != null ? c.getCorrelationId() : null);
+        whatsapp.put("messageProfile", messageProfile);
 
         return whatsapp;
     }

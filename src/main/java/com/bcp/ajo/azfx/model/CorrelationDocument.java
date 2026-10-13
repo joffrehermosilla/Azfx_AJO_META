@@ -71,6 +71,10 @@ public class CorrelationDocument {
     @JsonProperty("templateName")
     private String templateName;
 
+    /** ID de la campaña AJO (para XDM message.campaignId). */
+    @JsonProperty("campaignId")
+    private String campaignId;
+
     @JsonProperty("templateCategory")
     private String templateCategory;
 
@@ -168,6 +172,9 @@ public class CorrelationDocument {
 
     public String getTemplateName()    { return templateName; }
     public void setTemplateName(String v){ this.templateName = v; }
+
+    public String getCampaignId()      { return campaignId; }
+    public void setCampaignId(String v) { this.campaignId = v; }
 
     public String getTemplateCategory(){ return templateCategory; }
     public void setTemplateCategory(String v){ this.templateCategory = v; }
