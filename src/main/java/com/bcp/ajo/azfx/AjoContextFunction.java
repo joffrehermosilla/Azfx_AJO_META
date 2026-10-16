@@ -20,25 +20,15 @@ import com.microsoft.azure.functions.annotation.HttpTrigger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
 
 /**
- * ══════════════════════════════════════════════════════════════════════════
- * AZURE FUNCTION 1 — AjoContextFunction (Driving HTTP Adapter)
- * Endpoint: POST /api/ajo-context
- * ══════════════════════════════════════════════════════════════════════════
+ * Function 1: receives AJO Custom Action 2 context and stores it in Cosmos DB.
  */
 public class AjoContextFunction {
-
     private static final Logger log = LoggerFactory.getLogger(AjoContextFunction.class);
-
-    private static final ObjectMapper MAPPER = new ObjectMapper()
-        .registerModule(new JavaTimeModule());
-
-    // Puerto de Entrada (Caso de uso)
+    private static final ObjectMapper MAPPER = new ObjectMapper().registerModule(new JavaTimeModule());
     private final StoreAjoContextUseCase storeUseCase;
 
     public AjoContextFunction() {
@@ -55,95 +45,65 @@ public class AjoContextFunction {
 
     @FunctionName("ajo-context")
     public HttpResponseMessage run(
-        @HttpTrigger(
-            name = "req",
-            methods = { HttpMethod.POST },
-            authLevel = AuthorizationLevel.FUNCTION,
-            route = "ajo-context"
-        )
-        HttpRequestMessage<Optional<String>> request,
-        ExecutionContext context
-    ) {
+            @HttpTrigger(name = "req", methods = {
+                    HttpMethod.POST }, authLevel = AuthorizationLevel.FUNCTION, route = "ajo-context") HttpRequestMessage<Optional<String>> request,
+            ExecutionContext context) {
         long startMs = System.currentTimeMillis();
-        log.info("[FUNCTION1] ajo-context invocado. Invocation ID: {}", context.getInvocationId());
-
+        log.info("[FUNCTION1] ajo-context invocado. Invocation ID={}", context.getInvocationId());
         try {
-            // ── 1. Parsear body ──────────────────────────────────────────────
             String rawBody = request.getBody().orElse("").trim();
             if (rawBody.isEmpty()) {
-                log.warn("[FUNCTION1] Body vacío — rechazado.");
-                return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
-                    .header("Content-Type", "application/json")
-                    .body("{\"error\":\"Body requerido\"}")
-                    .build();
+                return json(request, HttpStatus.BAD_REQUEST, "{\"error\":\"Body requerido\"}");
             }
 
             AjoContextRequest req = MAPPER.readValue(rawBody, AjoContextRequest.class);
-
-            // ── 2. Validar campos obligatorios ───────────────────────────────
-            if (req.getWamid() == null || req.getWamid().isBlank()) {
-                log.warn("[FUNCTION1] wamid ausente — rechazado.");
-                return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
-                    .header("Content-Type", "application/json")
-                    .body("{\"error\":\"Campo 'wamid' es obligatorio\"}")
-                    .build();
+            if (isBlank(req.getWamid())) {
+                return json(request, HttpStatus.BAD_REQUEST, "{\"error\":\"Campo wamid es obligatorio\"}");
+            }
+            if (isBlank(req.getJourneyId())) {
+                return json(request, HttpStatus.BAD_REQUEST, "{\"error\":\"Campo journeyId es obligatorio\"}");
             }
 
-            if (req.getJourneyId() == null || req.getJourneyId().isBlank()) {
-                log.warn("[FUNCTION1] journeyId ausente — rechazado. wamid={}", req.getWamid());
-                return request.createResponseBuilder(HttpStatus.BAD_REQUEST)
-                    .header("Content-Type", "application/json")
-                    .body("{\"error\":\"Campo 'journeyId' es obligatorio\"}")
-                    .build();
-            }
-
-            // ── 3. Mapeo a Command y ejecución del Caso de Uso (Hexagonal) ───
             AjoContextCommand command = new AjoContextCommand(
-                req.getWamid(),
-                req.getProfileId(),
-                req.getRecipient(),
-                req.getWaId(),
-                req.getMessageStatus(),
-                req.getNamespace(),
-                req.getJourneyId(),
-                req.getJourneyVersionId(),
-                req.getJourneyVersionName(),
-                req.getJourneyInstanceId(),
-                req.getJourneyNodeId(),
-                req.getJourneyNodeName(),
-                req.getJourneyActionId(),
-                req.getJourneyActionName(),
-                req.getTemplateName(),
-                req.getTemplateCategory(),
-                req.getSandboxName(),
-                req.getType()
-            );
+                    req.getWamid(), req.getProfileId(), req.getRecipient(), req.getWaId(),
+                    req.getMessageStatus(), req.getNamespace(), req.getJourneyId(),
+                    req.getJourneyVersionId(), req.getJourneyVersionName(), req.getJourneyInstanceId(),
+                    req.getJourneyNodeId(), req.getJourneyNodeName(), req.getJourneyActionId(),
+                    req.getJourneyActionName(), req.getTemplateName(), req.getTemplateCategory(),
+                    req.getSandboxName(), req.getType(), req.getCampaignId(), req.getTemplateWamId(),
+                    req.getMessageProfileId(), req.getIsTestExecution());
 
             CorrelationDocument doc = storeUseCase.execute(command);
-
             long elapsedMs = System.currentTimeMillis() - startMs;
-            log.info("[FUNCTION1] OK — wamid={} correlationId={} elapsed={}ms",
-                doc.getWamid(), doc.getCorrelationId(), elapsedMs);
+            log.info("[FUNCTION1] Contexto almacenado — wamid={} elapsed={}ms",
+                    safeId(doc.getWamid()), elapsedMs);
 
-            Map<String, Object> responseBody = Map.of(
-                "correlationId", doc.getCorrelationId(),
-                "wamid",         doc.getWamid(),
-                "status",        doc.getCorrelationStatus(),
-                "elapsedMs",     elapsedMs
-            );
-
+            Map<String, Object> response = Map.of(
+                    "correlationId", doc.getCorrelationId(),
+                    "wamid", doc.getWamid(),
+                    "status", doc.getCorrelationStatus(),
+                    "elapsedMs", elapsedMs);
             return request.createResponseBuilder(HttpStatus.OK)
-                .header("Content-Type", "application/json")
-                .header("X-Correlation-Id", doc.getCorrelationId())
-                .body(MAPPER.writeValueAsString(responseBody))
-                .build();
-
+                    .header("Content-Type", "application/json")
+                    .header("X-Correlation-Id", doc.getCorrelationId())
+                    .body(MAPPER.writeValueAsString(response))
+                    .build();
         } catch (Exception e) {
-            log.error("[FUNCTION1] Error no manejado: {}", e.getMessage(), e);
-            return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR)
-                .header("Content-Type", "application/json")
-                .body("{\"error\":\"Error interno: " + e.getMessage().replace("\"", "'") + "\"}")
-                .build();
+            log.error("[FUNCTION1] Error guardando contexto AJO: {}", e.getMessage(), e);
+            return json(request, HttpStatus.INTERNAL_SERVER_ERROR,
+                    "{\"error\":\"No se pudo almacenar el contexto\"}");
         }
+    }
+
+    private static HttpResponseMessage json(HttpRequestMessage<?> request, HttpStatus status, String body) {
+        return request.createResponseBuilder(status).header("Content-Type", "application/json").body(body).build();
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static String safeId(String value) {
+        return isBlank(value) ? "UNKNOWN" : value.length() <= 18 ? value : value.substring(0, 12) + "…";
     }
 }

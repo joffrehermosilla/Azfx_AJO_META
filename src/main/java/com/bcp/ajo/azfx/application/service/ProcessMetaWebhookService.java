@@ -17,13 +17,14 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
 
 /**
- * ProcessMetaWebhookService — Orquesta de forma funcional el procesamiento de callbacks de Meta.
- * Procesa colecciones de eventos mediante flujos funcionales (Streams) y desacopla la persistencia,
- * transporte XDM y reenvío nativo a través de puertos.
+ * Orquesta los callbacks de Meta con ruteo EXCLUSIVO segun executionType:
+ * NATIVE -> relay del payload crudo a AJO Webhook (tablas nativas de AJO/CDP).
+ * No va al endpoint CDP custom.
+ * CUSTOM -> XDM BCP al endpoint CDP (tambien si el WAMID no esta
+ * correlacionado).
+ * Si algun destino falla se devuelve error para que Meta reintente.
  */
 public class ProcessMetaWebhookService implements ProcessMetaWebhookUseCase {
 
@@ -36,228 +37,325 @@ public class ProcessMetaWebhookService implements ProcessMetaWebhookUseCase {
     private final AjoRelayPort ajoRelay;
     private final XdmMapper xdmMapper;
 
+    /** Contadores mutables del procesamiento de UN callback. */
+    private static final class Stats {
+        int handled;
+        int cdpOk;
+        int failures;
+        boolean relayNeeded;
+    }
+
     public ProcessMetaWebhookService(
-        SignatureValidatorPort signatureValidator,
-        CorrelationRepositoryPort correlationRepo,
-        CdpPublisherPort cdpPublisher,
-        AjoRelayPort ajoRelay,
-        XdmMapper xdmMapper
-    ) {
+            SignatureValidatorPort signatureValidator,
+            CorrelationRepositoryPort correlationRepo,
+            CdpPublisherPort cdpPublisher,
+            AjoRelayPort ajoRelay,
+            XdmMapper xdmMapper) {
         this.signatureValidator = Objects.requireNonNull(signatureValidator, "signatureValidator required");
-        this.correlationRepo   = Objects.requireNonNull(correlationRepo, "correlationRepo required");
-        this.cdpPublisher       = Objects.requireNonNull(cdpPublisher, "cdpPublisher required");
-        this.ajoRelay           = Objects.requireNonNull(ajoRelay, "ajoRelay required");
-        this.xdmMapper          = Objects.requireNonNull(xdmMapper, "xdmMapper required");
+        this.correlationRepo = Objects.requireNonNull(correlationRepo, "correlationRepo required");
+        this.cdpPublisher = Objects.requireNonNull(cdpPublisher, "cdpPublisher required");
+        this.ajoRelay = Objects.requireNonNull(ajoRelay, "ajoRelay required");
+        this.xdmMapper = Objects.requireNonNull(xdmMapper, "xdmMapper required");
     }
 
     @Override
     public ProcessingResult execute(String rawBody, String signatureHeader) {
-        // 1. Verificación funcional de firma HMAC-SHA256
         if (!signatureValidator.isValid(rawBody, signatureHeader)) {
             log.warn("[USE-CASE] Firma HMAC-SHA256 rechazada");
             return ProcessingResult.unauthorized("Firma inválida");
         }
 
         try {
-            Map<String, Object> payload = MAPPER.readValue(rawBody, new TypeReference<>() {});
-            AtomicInteger processedCount = new AtomicInteger(0);
-
-            // 2. Procesamiento reactivo/funcional de entry[] y changes[]
-            extractValues(payload).forEach(value -> {
-                processDeliveries(value, payload, processedCount::incrementAndGet);
-                processTrackings(value, processedCount::incrementAndGet);
+            Map<String, Object> payload = MAPPER.readValue(rawBody, new TypeReference<>() {
             });
+            Stats stats = new Stats();
 
-            return ProcessingResult.ok(processedCount.get());
+            for (Map<String, Object> value : extractValues(payload)) {
+                processDeliveries(value, stats);
+                processTrackings(value, stats);
+            }
+
+            // Un solo relay por callback (evita duplicar si el payload trae varios statuses
+            // NATIVE).
+            if (stats.relayNeeded) {
+                boolean relayed = ajoRelay.relay(payload);
+                if (relayed) {
+                    log.info("[AJO] Relay nativo OK");
+                } else {
+                    stats.failures++;
+                    log.error("[AJO] Relay nativo FALLO");
+                }
+            }
+
+            if (stats.failures > 0) {
+                String message = "Downstream failed for " + stats.failures + " destination(s); "
+                        + stats.cdpOk + " event(s) accepted by CDP";
+                log.error("[USE-CASE] {}", message);
+                return new ProcessingResult(false, stats.handled, message);
+            }
+
+            log.info("[USE-CASE] Callback procesado, handled={} cdpAccepted={} relayedNative={}",
+                    stats.handled, stats.cdpOk, stats.relayNeeded);
+            return ProcessingResult.ok(stats.handled);
 
         } catch (Exception e) {
             log.error("[USE-CASE] Error procesando payload de Meta: {}", e.getMessage(), e);
-            return ProcessingResult.error(e.getMessage());
+            return ProcessingResult.error("Error procesando callback de Meta");
         }
     }
 
-    // ── Pipeline funcional para Delivery (statuses[]) ────────────────────────
-    private void processDeliveries(Map<String, Object> value, Map<String, Object> fullPayload, Runnable onProcessed) {
-        extractList(value, "statuses").stream()
-            .map(this::toDeliveryEvent)
-            .forEach(event -> {
-                log.info("[DELIVERY] wamid={} status={}", event.wamid(), event.status());
+    private void processDeliveries(Map<String, Object> value, Stats stats) {
+        for (Map<String, Object> status : extractList(value, "statuses")) {
+            DeliveryEvent event = toDeliveryEvent(status);
+            if (isBlank(event.wamid())) {
+                continue;
+            }
+            log.info("[DELIVERY] wamid={} status={}", safeId(event.wamid()), event.status());
 
-                // Lookup en Cosmos mediante puerto
-                Optional<CorrelationDocument> correlationOpt = correlationRepo.findByWamid(event.wamid());
-                CorrelationDocument doc = correlationOpt.orElse(null);
+            CorrelationDocument doc = correlationRepo.findByWamid(event.wamid()).orElse(null);
+            if (doc == null) {
+                log.warn("[DELIVERY] UNCORRELATED wamid={} status={}", safeId(event.wamid()), event.status());
+            }
 
-                if (doc == null) {
-                    log.warn("[DELIVERY] UNCORRELATED — wamid={} status={}", event.wamid(), event.status());
-                }
-
-                // Generar XDM ExperienceEvent
+            if (isNative(doc)) {
+                log.info("[ROUTE] NATIVE -> AJO relay, wamid={}", safeId(event.wamid()));
+                stats.relayNeeded = true;
+            } else {
+                log.info("[ROUTE] CUSTOM -> CDP, wamid={}", safeId(event.wamid()));
                 Map<String, Object> xdm = xdmMapper.buildDeliveryXdm(
-                    doc, event.status(), event.wamid(), event.metaTimestamp(),
-                    event.errorCode(), event.errorMessage()
-                );
-                cdpPublisher.publish(xdm);
+                        doc, event.status(), event.wamid(), event.metaTimestamp(),
+                        event.errorCode(), event.errorMessage());
+                if (cdpPublisher.publish(xdm)) {
+                    stats.cdpOk++;
+                } else {
+                    stats.failures++;
+                    log.error("[CDP] Delivery no confirmado, wamid={} status={}",
+                            safeId(event.wamid()), event.status());
+                }
+            }
 
-                // Relay condicional si executionType == "NATIVE"
-                correlationOpt
-                    .filter(c -> "NATIVE".equalsIgnoreCase(c.getExecutionType()))
-                    .ifPresent(c -> {
-                        log.info("[DELIVERY] executionType=NATIVE — relay a AJO Webhook");
-                        ajoRelay.relay(fullPayload);
-                    });
-
-                // Actualizar estado en Cosmos
-                String eventType = "bcp.whatsapp.delivery." + (event.status() != null ? event.status() : "unknown");
-                correlationRepo.updateStatus(event.wamid(), eventType, event.metaTimestamp(), Instant.now().toString());
-
-                onProcessed.run();
-            });
+            String eventType = "bcp.whatsapp.delivery."
+                    + (event.status() != null ? event.status().toLowerCase(Locale.ROOT) : "unknown");
+            correlationRepo.updateStatus(event.wamid(), eventType,
+                    event.metaTimestamp(), Instant.now().toString());
+            stats.handled++;
+        }
     }
 
-    // ── Pipeline funcional para Tracking (messages[]) ────────────────────────
-    private void processTrackings(Map<String, Object> value, Runnable onProcessed) {
-        extractList(value, "messages").stream()
-            .map(this::toTrackingEvent)
-            .filter(Objects::nonNull)
-            .forEach(event -> {
-                log.info("[TRACKING] wamidOut={} wamidIn={} type={}",
-                    event.wamidOutbound(), event.wamidInbound(), event.trackingType());
+    private void processTrackings(Map<String, Object> value, Stats stats) {
+        for (Map<String, Object> message : extractList(value, "messages")) {
+            TrackingEvent event = toTrackingEvent(message);
+            if (event == null) {
+                continue;
+            }
 
-                Optional<CorrelationDocument> correlationOpt = correlationRepo.findByWamid(event.wamidOutbound());
-                CorrelationDocument doc = correlationOpt.orElse(null);
+            // La clave de correlacion es el WAMID outbound (context.id), nunca el inbound.
+            CorrelationDocument doc = !isBlank(event.wamidOutbound())
+                    ? correlationRepo.findByWamid(event.wamidOutbound()).orElse(null)
+                    : null;
 
-                Map<String, Object> xdm = xdmMapper.buildTrackingXdm(
-                    doc, event.wamidOutbound(), event.wamidInbound(),
-                    event.metaTimestamp(), event.trackingType(),
-                    event.reply(), event.buttonId(), event.buttonTitle()
-                );
-                cdpPublisher.publish(xdm);
+            if (doc == null && isBlank(event.payloadCustomerId())) {
+                log.warn("[TRACKING] No se puede correlacionar ni identificar el evento; se omite. wamidIn={}",
+                        safeId(event.wamidInbound()));
+                continue;
+            }
 
-                onProcessed.run();
-            });
+            log.info("[TRACKING] wamidOut={} wamidIn={} type={} correlated={}",
+                    safeId(event.wamidOutbound()), safeId(event.wamidInbound()),
+                    event.trackingType(), doc != null);
+
+            if (isNative(doc)) {
+                log.info("[ROUTE] NATIVE -> AJO relay (tracking), wamidOut={}", safeId(event.wamidOutbound()));
+                stats.relayNeeded = true;
+                stats.handled++;
+                continue;
+            }
+
+            Map<String, Object> xdm;
+            if (!isBlank(event.payloadCustomerId()) || !isBlank(event.payloadTemplateName())) {
+                xdm = xdmMapper.buildTrackingXdm(
+                        doc, event.wamidOutbound(), event.wamidInbound(), event.metaTimestamp(),
+                        event.trackingType(), event.reply(), event.buttonId(), event.buttonTitle(),
+                        event.payloadCustomerId(), event.payloadTemplateName());
+            } else {
+                xdm = xdmMapper.buildTrackingXdm(
+                        doc, event.wamidOutbound(), event.wamidInbound(), event.metaTimestamp(),
+                        event.trackingType(), event.reply(), event.buttonId(), event.buttonTitle());
+            }
+
+            log.info("[ROUTE] CUSTOM -> CDP (tracking), wamidOut={}", safeId(event.wamidOutbound()));
+            if (cdpPublisher.publish(xdm)) {
+                stats.cdpOk++;
+            } else {
+                stats.failures++;
+                log.error("[CDP] Tracking no confirmado, wamidIn={} type={}",
+                        safeId(event.wamidInbound()), event.trackingType());
+            }
+            stats.handled++;
+        }
     }
 
-    // ── Mapeadores puros ───────────────────────────────────────────────────
-    @SuppressWarnings("unchecked")
+    private static boolean isNative(CorrelationDocument doc) {
+        return doc != null && "NATIVE".equalsIgnoreCase(doc.getExecutionType());
+    }
+
+    // Parsing de payload de Meta
+
     private DeliveryEvent toDeliveryEvent(Map<String, Object> status) {
-        String wamid  = getString(status, "id");
-        String stat   = getString(status, "status");
-        String metaTs = getString(status, "timestamp");
+        String wamid = getString(status, "id");
+        String state = getString(status, "status");
+        String metaTimestamp = getString(status, "timestamp");
 
-        Map<String, Object> errObj = getMap(status, "errors");
-        String errCode = errObj != null ? getString(errObj, "code") : null;
-        String errMsg  = errObj != null ? getString(errObj, "title") : null;
+        Map<String, Object> firstError = firstError(status.get("errors"));
+        String errorCode = firstError != null ? getString(firstError, "code") : null;
+        String errorMessage = firstError != null
+                ? firstNonBlank(getString(firstError, "title"), getString(firstError, "message"))
+                : null;
 
-        return new DeliveryEvent(wamid, stat, metaTs, errCode, errMsg);
+        return new DeliveryEvent(wamid, state, metaTimestamp, errorCode, errorMessage);
     }
 
-    @SuppressWarnings("unchecked")
     private TrackingEvent toTrackingEvent(Map<String, Object> message) {
-        String type     = getString(message, "type");
-        String wamidIn  = getString(message, "id");
-        String metaTs   = getString(message, "timestamp");
-
-        Map<String, Object> ctx = getMap(message, "context");
-        String wamidOut = ctx != null ? getString(ctx, "id") : wamidIn;
+        String type = getString(message, "type");
+        String wamidIn = getString(message, "id");
+        String metaTimestamp = getString(message, "timestamp");
+        Map<String, Object> context = getMap(message, "context");
+        String wamidOutbound = context != null ? getString(context, "id") : null;
 
         if ("interactive".equals(type)) {
             Map<String, Object> interactive = getMap(message, "interactive");
-            if (interactive != null) {
-                String subType = getString(interactive, "type");
-                if ("button_reply".equals(subType)) {
-                    Map<String, Object> btn = getMap(interactive, "button_reply");
-                    return new TrackingEvent(
-                        wamidOut, wamidIn, metaTs, "button_reply",
-                        btn != null ? getString(btn, "title") : "",
-                        btn != null ? getString(btn, "id") : "",
-                        btn != null ? getString(btn, "title") : ""
-                    );
-                }
+            if (interactive != null && "button_reply".equals(getString(interactive, "type"))) {
+                Map<String, Object> buttonReply = getMap(interactive, "button_reply");
+                return new TrackingEvent(
+                        wamidOutbound, wamidIn, metaTimestamp, "button_reply",
+                        buttonReply != null ? getString(buttonReply, "title") : null,
+                        buttonReply != null ? getString(buttonReply, "id") : null,
+                        buttonReply != null ? getString(buttonReply, "title") : null);
             }
-        } else if ("text".equals(type)) {
-            Map<String, Object> textObj = getMap(message, "text");
-            String text = textObj != null ? getString(textObj, "body") : "";
-            return new TrackingEvent(wamidOut, wamidIn, metaTs, "text_reply", text, null, null);
         }
 
-    
-if ("button".equals(type)) {
-    Map<String, Object> button = getMap(message, "button");
+        if ("text".equals(type)) {
+            Map<String, Object> text = getMap(message, "text");
+            return new TrackingEvent(wamidOutbound, wamidIn, metaTimestamp, "text_reply",
+                    text != null ? getString(text, "body") : null, null, null);
+        }
 
-    if (button == null) {
+        // Quick Reply:
+        // {"type":"button","button":{"payload":"cid=...|tn=...","text":"..."}}
+        if ("button".equals(type)) {
+            Map<String, Object> button = getMap(message, "button");
+            if (button == null) {
+                return null;
+            }
+            Map<String, String> metadata = parseButtonPayload(getString(button, "payload"));
+            return new TrackingEvent(
+                    wamidOutbound, wamidIn, metaTimestamp, "button_reply",
+                    getString(button, "text"), null, getString(button, "text"),
+                    metadata.get("cid"), metadata.get("tn"));
+        }
         return null;
     }
 
-    String rawPayload = getString(button, "payload");
-    Map<String, String> metadata = parseButtonPayload(rawPayload);
-
-    Map<String, Object> context = getMap(message, "context");
-    String wamidOutbound = context != null
-        ? getString(context, "id")
-        : null;
-
-    return new TrackingEvent(
-        wamidOutbound,
-        wamidIn,
-        metaTs,
-        "button_reply",
-        getString(button, "text"),
-        null,
-        getString(button, "text"),
-        metadata.get("cid"),
-        metadata.get("tn")
-    );
-}
+    private Map<String, Object> firstError(Object errors) {
+        if (errors instanceof List<?> list && !list.isEmpty() && list.get(0) instanceof Map<?, ?> first) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> result = (Map<String, Object>) first;
+            return result;
+        }
+        if (errors instanceof Map<?, ?> map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> result = (Map<String, Object>) map;
+            return result;
+        }
         return null;
-
-
     }
 
-    // ── Extracción segura y funcional de colecciones JSON ───────────────────
-    @SuppressWarnings("unchecked")
     private List<Map<String, Object>> extractValues(Map<String, Object> payload) {
-        return Optional.ofNullable(payload)
-            .map(p -> (List<Map<String, Object>>) p.get("entry"))
-            .orElse(List.of())
-            .stream()
-            .map(e -> (List<Map<String, Object>>) e.get("changes"))
-            .filter(Objects::nonNull)
-            .flatMap(List::stream)
-            .map(c -> (Map<String, Object>) c.get("value"))
-            .filter(Objects::nonNull)
-            .toList();
+        Object rawEntry = payload.get("entry");
+        if (!(rawEntry instanceof List<?> entries)) {
+            return List.of();
+        }
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object entryObject : entries) {
+            if (!(entryObject instanceof Map<?, ?> entry)) {
+                continue;
+            }
+            Object rawChanges = entry.get("changes");
+            if (!(rawChanges instanceof List<?> changes)) {
+                continue;
+            }
+            for (Object changeObject : changes) {
+                if (!(changeObject instanceof Map<?, ?> change)) {
+                    continue;
+                }
+                Object rawValue = change.get("value");
+                if (rawValue instanceof Map<?, ?> value) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> typed = (Map<String, Object>) value;
+                    result.add(typed);
+                }
+            }
+        }
+        return result;
     }
 
-    private Map<String, String> parseButtonPayload(String payload) {
-    if (payload == null || payload.isBlank()) {
-        return Map.of();
-    }
-
-    return Arrays.stream(payload.split("\\|"))
-        .map(String::trim)
-        .filter(part -> part.contains("="))
-        .map(part -> part.split("=", 2))
-        .filter(pair -> pair.length == 2)
-        .filter(pair -> !pair[0].isBlank() && !pair[1].isBlank())
-        .collect(java.util.stream.Collectors.toMap(
-            pair -> pair[0].trim(),
-            pair -> pair[1].trim(),
-            (first, ignored) -> first
-        ));
-}
-
-    @SuppressWarnings("unchecked")
     private List<Map<String, Object>> extractList(Map<String, Object> map, String key) {
-        return Optional.ofNullable((List<Map<String, Object>>) map.get(key)).orElse(List.of());
+        Object value = map.get(key);
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> mapItem) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> typed = (Map<String, Object>) mapItem;
+                result.add(typed);
+            }
+        }
+        return result;
     }
 
-    @SuppressWarnings("unchecked")
     private Map<String, Object> getMap(Map<String, Object> map, String key) {
-        return (Map<String, Object>) map.get(key);
+        Object value = map.get(key);
+        if (value instanceof Map<?, ?> raw) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> typed = (Map<String, Object>) raw;
+            return typed;
+        }
+        return null;
     }
 
     private String getString(Map<String, Object> map, String key) {
-        Object val = map.get(key);
-        return val != null ? String.valueOf(val) : null;
+        Object value = map.get(key);
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private Map<String, String> parseButtonPayload(String payload) {
+        if (isBlank(payload)) {
+            return Map.of();
+        }
+        Map<String, String> result = new LinkedHashMap<>();
+        for (String part : payload.split("\\|")) {
+            String[] pair = part.trim().split("=", 2);
+            if (pair.length == 2 && !pair[0].isBlank() && !pair[1].isBlank()) {
+                result.putIfAbsent(pair[0].trim(), pair[1].trim());
+            }
+        }
+        return result;
+    }
+
+    private static String firstNonBlank(String first, String second) {
+        return !isBlank(first) ? first : second;
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static String safeId(String value) {
+        if (isBlank(value)) {
+            return "UNKNOWN";
+        }
+        return value.length() <= 18 ? value : value.substring(0, 12) + "…";
     }
 }

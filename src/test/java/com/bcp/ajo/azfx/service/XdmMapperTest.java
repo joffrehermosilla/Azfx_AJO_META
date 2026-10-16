@@ -35,23 +35,34 @@ class XdmMapperTest {
         return doc;
     }
 
+    /**
+     * Nombre del evento BCP: ahora vive en _bcp.event.name (eventType es fijo
+     * "whatsapp.log").
+     */
+    @SuppressWarnings("unchecked")
+    private static String eventName(Map<String, Object> xdm) {
+        Map<String, Object> bcp = (Map<String, Object>) xdm.get("_bcp");
+        Map<String, Object> event = (Map<String, Object>) bcp.get("event");
+        return (String) event.get("name");
+    }
+
     @Test
     @DisplayName("buildDeliveryXdm genera schema correcto para status delivered")
     void shouldBuildDeliveryXdmForDeliveredStatus() {
         CorrelationDocument doc = createSampleCorrelation("CUSTOM");
 
         Map<String, Object> xdm = xdmMapper.buildDeliveryXdm(
-            doc,
-            "delivered",
-            "wamid.HBgLM...12345",
-            "1728100000",
-            null,
-            null
-        );
+                doc,
+                "delivered",
+                "wamid.HBgLM...12345",
+                "1728100000",
+                null,
+                null);
 
         assertNotNull(xdm.get("_id"));
         assertNotNull(xdm.get("timestamp"));
-        assertEquals("bcp.whatsapp.delivery.delivered", xdm.get("eventType"));
+        assertEquals("whatsapp.log", xdm.get("eventType"));
+        assertEquals("bcp.whatsapp.delivery.delivered", eventName(xdm));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> bcp = (Map<String, Object>) xdm.get("_bcp");
@@ -87,15 +98,15 @@ class XdmMapperTest {
         CorrelationDocument doc = createSampleCorrelation("NATIVE");
 
         Map<String, Object> xdm = xdmMapper.buildDeliveryXdm(
-            doc,
-            "failed",
-            "wamid.HBgLM...12345",
-            "1728100000",
-            "131026",
-            "Receiver is incapable of receiving this message"
-        );
+                doc,
+                "failed",
+                "wamid.HBgLM...12345",
+                "1728100000",
+                "131026",
+                "Receiver is incapable of receiving this message");
 
-        assertEquals("bcp.whatsapp.delivery.failed", xdm.get("eventType"));
+        assertEquals("whatsapp.log", xdm.get("eventType"));
+        assertEquals("bcp.whatsapp.delivery.failed", eventName(xdm));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> bcp = (Map<String, Object>) xdm.get("_bcp");
@@ -118,17 +129,17 @@ class XdmMapperTest {
         CorrelationDocument doc = createSampleCorrelation("CUSTOM");
 
         Map<String, Object> xdm = xdmMapper.buildTrackingXdm(
-            doc,
-            "wamid.HBgLM...12345", // Outbound
-            "wamid.HBgLI...67890", // Inbound
-            "1728100500",
-            "button_reply",
-            "Lo quiero ahora",
-            "btn_aceptar_oferta",
-            "Lo quiero ahora"
-        );
+                doc,
+                "wamid.HBgLM...12345", // Outbound
+                "wamid.HBgLI...67890", // Inbound
+                "1728100500",
+                "button_reply",
+                "Lo quiero ahora",
+                "btn_aceptar_oferta",
+                "Lo quiero ahora");
 
-        assertEquals("bcp.whatsapp.tracking.button_reply", xdm.get("eventType"));
+        assertEquals("whatsapp.log", xdm.get("eventType"));
+        assertEquals("bcp.whatsapp.tracking.button_reply", eventName(xdm));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> bcp = (Map<String, Object>) xdm.get("_bcp");
@@ -154,15 +165,16 @@ class XdmMapperTest {
     @DisplayName("buildDeliveryXdm maneja evento UNCORRELATED correctamente sin NPE")
     void shouldHandleUncorrelatedDeliveryGracefully() {
         Map<String, Object> xdm = xdmMapper.buildDeliveryXdm(
-            null, // Sin documento de correlación previo en Cosmos
-            "sent",
-            "wamid.HBgLM...desconocido",
-            "1728100000",
-            null,
-            null
-        );
+                null, // Sin documento de correlación previo en Cosmos
+                "sent",
+                "wamid.HBgLM...desconocido",
+                "1728100000",
+                null,
+                null);
 
-        assertEquals("bcp.whatsapp.delivery.sent", xdm.get("eventType"));
+        assertEquals("whatsapp.log", xdm.get("eventType"));
+        assertEquals("bcp.whatsapp.delivery.sent", eventName(xdm));
+
         @SuppressWarnings("unchecked")
         Map<String, Object> bcp = (Map<String, Object>) xdm.get("_bcp");
         @SuppressWarnings("unchecked")
@@ -176,5 +188,29 @@ class XdmMapperTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> correlation = (Map<String, Object>) whatsapp.get("correlation");
         assertEquals("UNCORRELATED", correlation.get("correlationStatus"));
+    }
+
+    @Test
+    @DisplayName("metaTimestamp epoch de Meta se convierte a date-time ISO-8601")
+    void shouldConvertMetaEpochTimestampToIso() {
+        Map<String, Object> xdm = xdmMapper.buildDeliveryXdm(
+                createSampleCorrelation("CUSTOM"),
+                "read",
+                "wamid.HBgLM...12345",
+                "1728100000",
+                null,
+                null);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> bcp = (Map<String, Object>) xdm.get("_bcp");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> messaging = (Map<String, Object>) bcp.get("messaging");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> whatsapp = (Map<String, Object>) messaging.get("whatsapp");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> audit = (Map<String, Object>) whatsapp.get("audit");
+
+        assertEquals("2024-10-05T03:46:40Z", audit.get("metaTimestamp"));
+        assertNotNull(audit.get("receivedTimestamp"));
     }
 }
