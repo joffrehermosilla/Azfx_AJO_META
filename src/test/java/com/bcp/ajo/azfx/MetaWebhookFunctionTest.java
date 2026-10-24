@@ -319,4 +319,45 @@ class MetaWebhookFunctionTest {
     verify(cdpService).publish(anyMap());
     assertEquals(HttpStatus.OK.value(), res.getStatusCode());
   }
+
+  @Test
+  @DisplayName("POST callback de delivery sin contexto en Cosmos (envio NATIVE): reenvia a AJO y no publica a CDP")
+  void shouldRelayToAjoWhenDeliveryHasNoCorrelation() {
+    String wamid = "wamid.HBgLSinContexto001";
+    String body = """
+        {"object":"whatsapp_business_account","entry":[{"changes":[{"field":"messages","value":{
+          "statuses":[{"id":"wamid.HBgLSinContexto001","status":"delivered","timestamp":"1728100400"}]}}]}]}
+        """;
+    when(sigValidator.isValid(anyString(), anyString())).thenReturn(true);
+    when(ajoService.relay(anyMap())).thenReturn(true);
+    when(cosmosService.findByWamid(wamid)).thenReturn(Optional.empty());
+
+    MockHttp mockHttp = createMockHttp(body, Map.of("x-hub-signature-256", "sha256=ok"), null, HttpStatus.OK);
+    HttpResponseMessage res = function.callback(mockHttp.request(), context);
+
+    verify(ajoService).relay(anyMap());
+    verifyNoInteractions(cdpService);
+    verify(cosmosService, never()).updateStatus(anyString(), anyString(), anyString(), anyString());
+    assertEquals(HttpStatus.OK.value(), res.getStatusCode());
+  }
+
+  @Test
+  @DisplayName("POST callback de respuesta del usuario sin contexto ni cid (envio NATIVE): reenvia a AJO")
+  void shouldRelayToAjoWhenReplyHasNoCorrelation() {
+    String body = """
+        {"object":"whatsapp_business_account","entry":[{"changes":[{"field":"messages","value":{
+          "messages":[{"from":"51999888777","id":"wamid.HBgLInbound900","timestamp":"1728100500","type":"button",
+          "context":{"id":"wamid.HBgLSinContexto002"},"button":{"payload":"BTN_01","text":"Quiero mas informacion"}}]}}]}]}
+        """;
+    when(sigValidator.isValid(anyString(), anyString())).thenReturn(true);
+    when(ajoService.relay(anyMap())).thenReturn(true);
+    when(cosmosService.findByWamid("wamid.HBgLSinContexto002")).thenReturn(Optional.empty());
+
+    MockHttp mockHttp = createMockHttp(body, Map.of("x-hub-signature-256", "sha256=ok"), null, HttpStatus.OK);
+    HttpResponseMessage res = function.callback(mockHttp.request(), context);
+
+    verify(ajoService).relay(anyMap());
+    verifyNoInteractions(cdpService);
+    assertEquals(HttpStatus.OK.value(), res.getStatusCode());
+  }
 }

@@ -10,32 +10,38 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
- * CdpService — Adaptador de salida (Driven Adapter) para Adobe CDP (AEP Streaming Ingestion).
- * Implementa el puerto CdpPublisherPort.
+ * Adaptador de salida hacia el inlet de Adobe CDP (DCS). Implementa
+ * CdpPublisherPort.
  */
 public class CdpService implements CdpPublisherPort {
 
     private static final Logger log = LoggerFactory.getLogger(CdpService.class);
-
-    private static final ObjectMapper MAPPER = new ObjectMapper()
-        .registerModule(new JavaTimeModule());
-
+    private static final ObjectMapper MAPPER = new ObjectMapper().registerModule(new JavaTimeModule());
     private static final HttpClient HTTP = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(5))
-        .build();
+            .connectTimeout(Duration.ofSeconds(5)).build();
+    private static final int MAX_BYTES = 1_048_576;
 
     private final String cdpIngestUrl;
     private final String cdpFlowId;
     private final String cdpBearerToken;
+    private final String sandboxName;
+    private final String sandboxHeader;
 
     public CdpService() {
-        this.cdpIngestUrl   = System.getenv("CDP_INGEST_URL");
-        this.cdpFlowId      = System.getenv("CDP_FLOW_ID");
+        this.cdpIngestUrl = System.getenv("CDP_INGEST_URL");
+        this.cdpFlowId = System.getenv("CDP_FLOW_ID");
         this.cdpBearerToken = System.getenv("CDP_BEARER_TOKEN");
+        this.sandboxName = System.getenv("CDP_SANDBOX_NAME"); // ej: dev
+        String h = System.getenv("CDP_SANDBOX_HEADER"); // nombre del header, configurable
+        this.sandboxHeader = (h == null || h.isBlank()) ? "x-sandbox-name" : h;
     }
 
     @Override
@@ -43,75 +49,92 @@ public class CdpService implements CdpPublisherPort {
         return sendEvent(xdmEvent);
     }
 
-    /**
-     * Envía el XDM event a AEP Streaming Ingestion.
-     *
-     * @param xdmEvent Map con el XDM ExperienceEvent construido por XdmMapper.
-     * @return true si CDP respondió 200, false en caso contrario.
-     */
     public boolean sendEvent(Map<String, Object> xdmEvent) {
         if (cdpIngestUrl == null || cdpIngestUrl.isBlank()) {
             log.error("[CDP] CDP_INGEST_URL no configurada. Evento no enviado.");
             return false;
         }
-
         try {
-            String body = MAPPER.writeValueAsString(xdmEvent);
+            // Se quitan los null para no enviar claves vacías al schema.
+            String body = MAPPER.writeValueAsString(pruneNulls(xdmEvent));
 
-            // Validar tamaño del payload (1 MB máximo)
-            if (body.getBytes().length > 1_048_576) {
-                log.error("[CDP] Payload supera 1 MB — se descarta. wamid={}",
-                    extractWamidFromXdm(xdmEvent));
+            if (body.getBytes(StandardCharsets.UTF_8).length > MAX_BYTES) {
+                log.error("[CDP] Payload supera 1 MB, se descarta. wamid={}", extractWamid(xdmEvent));
                 return false;
             }
 
-            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                .uri(URI.create(cdpIngestUrl))
-                .timeout(Duration.ofSeconds(10))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(body));
+            HttpRequest.Builder req = HttpRequest.newBuilder()
+                    .uri(URI.create(cdpIngestUrl))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body));
 
-            // Header de Flow ID (AEP Streaming)
             if (cdpFlowId != null && !cdpFlowId.isBlank()) {
-                reqBuilder.header("x-adobe-flow-id", cdpFlowId);
+                req.header("x-adobe-flow-id", cdpFlowId);
             }
-
-            // Bearer token de autenticación
+            if (sandboxName != null && !sandboxName.isBlank()) {
+                req.header(sandboxHeader, sandboxName);
+            }
             if (cdpBearerToken != null && !cdpBearerToken.isBlank()) {
-                reqBuilder.header("Authorization", "Bearer " + cdpBearerToken);
+                req.header("Authorization", "Bearer " + cdpBearerToken);
             }
 
-            HttpResponse<String> response = HTTP.send(
-                reqBuilder.build(),
-                HttpResponse.BodyHandlers.ofString()
-            );
+            HttpResponse<String> res = HTTP.send(req.build(), HttpResponse.BodyHandlers.ofString());
+            int code = res.statusCode();
 
-            if (response.statusCode() == 200 || response.statusCode() == 204) {
-                log.info("[CDP] Evento enviado OK — status={} eventType={}",
-                    response.statusCode(), xdmEvent.get("eventType"));
+            if (code >= 200 && code < 300) { // AEP puede responder 200 o 202
+                log.info("[CDP] Evento enviado OK, status={} eventName={} wamid={}",
+                        code, extractEventName(xdmEvent), extractWamid(xdmEvent));
                 return true;
-            } else {
-                log.error("[CDP] Error HTTP — status={} body={}", response.statusCode(), response.body());
-                return false;
             }
+            log.error("[CDP] Error HTTP, status={} body={}", code, res.body());
+            return false;
 
         } catch (Exception e) {
-            log.error("[CDP] Exception enviando evento — error={}", e.getMessage(), e);
+            log.error("[CDP] Exception enviando evento, error={}", e.getMessage(), e);
             return false;
         }
     }
 
-    private String extractWamidFromXdm(Map<String, Object> xdm) {
+    @SuppressWarnings("unchecked")
+    private static Object pruneNulls(Object node) {
+        if (node instanceof Map<?, ?> map) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            ((Map<String, Object>) map).forEach((k, v) -> {
+                if (v != null)
+                    out.put(k, pruneNulls(v));
+            });
+            return out;
+        }
+        if (node instanceof List<?> list) {
+            List<Object> out = new ArrayList<>();
+            for (Object o : list)
+                if (o != null)
+                    out.add(pruneNulls(o));
+            return out;
+        }
+        return node;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String extractWamid(Map<String, Object> xdm) {
         try {
-            @SuppressWarnings("unchecked")
             Map<String, Object> bcp = (Map<String, Object>) xdm.get("_bcp");
-            @SuppressWarnings("unchecked")
             Map<String, Object> messaging = (Map<String, Object>) bcp.get("messaging");
-            @SuppressWarnings("unchecked")
             Map<String, Object> whatsapp = (Map<String, Object>) messaging.get("whatsapp");
-            @SuppressWarnings("unchecked")
             Map<String, Object> message = (Map<String, Object>) whatsapp.get("message");
             return String.valueOf(message.get("wamId"));
+        } catch (Exception e) {
+            return "unknown";
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String extractEventName(Map<String, Object> xdm) {
+        try {
+            Map<String, Object> bcp = (Map<String, Object>) xdm.get("_bcp");
+            Map<String, Object> event = (Map<String, Object>) bcp.get("event");
+            return String.valueOf(event.get("name"));
         } catch (Exception e) {
             return "unknown";
         }

@@ -112,9 +112,13 @@ public class ProcessMetaWebhookService implements ProcessMetaWebhookUseCase {
             }
             log.info("[DELIVERY] wamid={} status={}", safeId(event.wamid()), event.status());
 
-            CorrelationDocument doc = correlationRepo.findByWamid(event.wamid()).orElse(null);
+            CorrelationDocument doc = findWithRetry(event.wamid());
             if (doc == null) {
-                log.warn("[DELIVERY] UNCORRELATED wamid={} status={}", safeId(event.wamid()), event.status());
+                log.warn("[DELIVERY] UNCORRELATED (NATIVE) wamid={} status={} -> Relay a AJO",
+                        safeId(event.wamid()), event.status());
+                stats.relayNeeded = true;
+                stats.handled++;
+                continue;
             }
 
             if (isNative(doc)) {
@@ -155,8 +159,10 @@ public class ProcessMetaWebhookService implements ProcessMetaWebhookUseCase {
                     : null;
 
             if (doc == null && isBlank(event.payloadCustomerId())) {
-                log.warn("[TRACKING] No se puede correlacionar ni identificar el evento; se omite. wamidIn={}",
+                log.info("[ROUTE] NATIVE (uncorrelated reply) -> AJO relay, wamidIn={}",
                         safeId(event.wamidInbound()));
+                stats.relayNeeded = true;
+                stats.handled++;
                 continue;
             }
 
@@ -193,6 +199,33 @@ public class ProcessMetaWebhookService implements ProcessMetaWebhookUseCase {
             }
             stats.handled++;
         }
+    }
+
+    /**
+     * Meta puede enviar "sent"/"delivered" antes de que la Custom Action 2 termine
+     * de guardar el contexto.
+     * Reintenta el lookup unos segundos solo cuando el documento aun no existe.
+     */
+    private CorrelationDocument findWithRetry(String wamid) {
+        final int attempts = 4;
+        for (int i = 1; i <= attempts; i++) {
+            Optional<CorrelationDocument> found = correlationRepo.findByWamid(wamid);
+            if (found != null && found.isPresent()) {
+                if (i > 1) {
+                    log.info("[DELIVERY] Correlacion encontrada en el intento {} wamid={}", i, safeId(wamid));
+                }
+                return found.get();
+            }
+            if (i < attempts) {
+                try {
+                    Thread.sleep(1500);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        return null;
     }
 
     private static boolean isNative(CorrelationDocument doc) {

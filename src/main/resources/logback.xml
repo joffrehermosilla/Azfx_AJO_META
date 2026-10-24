@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Silencia el DEBUG del SDK de Cosmos/Netty (ruido y, en las rutas de documento, WAMIDs que embeben el telefono). -->
+<configuration>
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder><pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} -- %msg%n</pattern></encoder>
+  </appender>
+  <logger name="com.bcp" level="INFO"/>
+  <logger name="com.azure" level="WARN"/>
+  <logger name="reactor" level="WARN"/>
+  <logger name="io.netty" level="WARN"/>
+  <logger name="io.opentelemetry" level="WARN"/>
+  <root level="INFO"><appender-ref ref="STDOUT"/></root>
+</configuration>
